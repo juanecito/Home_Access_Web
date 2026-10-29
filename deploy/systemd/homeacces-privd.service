@@ -1,0 +1,34 @@
+[Unit]
+Description=HomeAcces privileged helper (PAM authentication and web terminal)
+After=network.target
+
+[Service]
+Type=simple
+# Root is required to verify other users' passwords (pam_unix) and to start their login
+# shells (runuser). The code is root-owned in /opt/homeacces and only listens on localhost
+# and on a Unix socket restricted to the homeacces group.
+User=root
+WorkingDirectory=/opt/homeacces/backend
+EnvironmentFile=/etc/homeacces/homeacces.env
+ExecStart=/opt/homeacces/venv/bin/python -m homeacces_privd
+Restart=on-failure
+RestartSec=3
+
+RuntimeDirectory=homeacces
+RuntimeDirectoryMode=0755
+UMask=0077
+# Terminal shells are moved to their own logind session by pam_systemd; only
+# leftovers in this cgroup are killed when the service stops.
+KillMode=mixed
+
+# Light hardening: shells started here must behave like a normal SSH login, so the
+# filesystem and privileges cannot be restricted further.
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

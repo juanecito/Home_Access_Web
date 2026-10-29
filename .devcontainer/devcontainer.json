@@ -1,0 +1,40 @@
+{
+  "name": "HomeAcces (Debian 13)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "dev",
+  // tini as PID 1 reaps the background services started by homeacces.sh when they stop.
+  "init": true,
+  "updateRemoteUserUID": true,
+
+  "forwardPorts": [5173, 8443],
+  "portsAttributes": {
+    "5173": { "label": "HomeAcces (dev, hot reload)", "onAutoForward": "openBrowser" },
+    "8443": { "label": "HomeAcces (nginx, production config)", "protocol": "https", "onAutoForward": "notify" },
+    "8000": { "label": "Flask API", "onAutoForward": "silent" },
+    "8001": { "label": "homeacces-privd terminal", "onAutoForward": "silent" }
+  },
+
+  // Installs the Python venv and npm packages, creates the dev config and database.
+  "postCreateCommand": ".devcontainer/post-create.sh",
+  // Starts API + terminal helper + Vite in the background on every container start.
+  "postStartCommand": ".devcontainer/homeacces.sh start dev",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.flake8"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/backend/.venv/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.cwd": "${containerWorkspaceFolder}/backend",
+        "python.testing.pytestArgs": ["tests"],
+        "flake8.args": ["--config=backend/setup.cfg"]
+      }
+    }
+  }
+}

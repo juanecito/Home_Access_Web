@@ -1,0 +1,39 @@
+[Unit]
+Description=HomeAcces API (Flask + gunicorn)
+After=network.target homeacces.socket
+Requires=homeacces.socket
+
+[Service]
+Type=simple
+User=homeacces
+Group=homeacces
+WorkingDirectory=/opt/homeacces/backend
+EnvironmentFile=/etc/homeacces/homeacces.env
+# Two workers is plenty for a Raspberry Pi; raise on a Pi 5 if needed.
+# No --bind: gunicorn listens on the socket passed by homeacces.socket (/run/homeacces-api.sock).
+ExecStart=/opt/homeacces/venv/bin/gunicorn --workers 2 --access-logfile - wsgi:app
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+StateDirectory=homeacces
+StateDirectoryMode=0750
+LogsDirectory=homeacces
+LogsDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/homeacces
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

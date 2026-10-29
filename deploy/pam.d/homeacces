@@ -1,0 +1,4 @@
+# /etc/pam.d/homeacces — used by homeacces-privd to check system account passwords.
+# Same rules as other Debian logins (pam_unix, faillock if configured, account expiry).
+@include common-auth
+@include common-account

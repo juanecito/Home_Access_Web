@@ -1,0 +1,12 @@
+# /etc/logrotate.d/homeacces — installed by deploy/install.sh.
+# The API opens the file for every entry, so no reload is needed after rotation.
+/var/log/homeacces/activity.log {
+    su homeacces homeacces
+    weekly
+    rotate 52
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 homeacces homeacces
+}

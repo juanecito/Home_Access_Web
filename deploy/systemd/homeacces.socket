@@ -1,0 +1,14 @@
+[Unit]
+Description=HomeAcces API socket (nginx → gunicorn)
+
+[Socket]
+# A Unix socket instead of 127.0.0.1:8000: only nginx (www-data) and root may connect, so local
+# users cannot reach gunicorn directly and spoof X-Forwarded-For (client IP used for login
+# throttling and the activity log). gunicorn receives the socket from systemd.
+ListenStream=/run/homeacces-api.sock
+SocketUser=www-data
+SocketGroup=www-data
+SocketMode=0600
+
+[Install]
+WantedBy=sockets.target
