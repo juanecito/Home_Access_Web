@@ -10,5 +10,11 @@ export default defineConfig({
       '/api': 'http://127.0.0.1:8000',
     },
   },
-  build: { outDir: 'dist', sourcemap: false },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    // The minifier drops license comments, so ship the licenses of all bundled dependencies
+    // (React, xterm.js, …) as /licenses.md instead, as their licenses require.
+    license: { fileName: 'licenses.md' },
+  },
 });

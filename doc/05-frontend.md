@@ -11,7 +11,7 @@ In production, the build output (`frontend/dist/`) is plain static files served 
 | `react`, `react-dom` 18.3.1 | UI rendering |
 | `react-router-dom` 6.30.6 | Client-side routing (`BrowserRouter`) |
 | `@xterm/xterm` 5.5.0, `@xterm/addon-fit` 0.10.0 | Web terminal emulator |
-| `vite` 5.4.21, `@vitejs/plugin-react` | Dev server with hot reload, production bundler |
+| `vite` 8.3.5, `@vitejs/plugin-react` 6.1.2 | Dev server with hot reload, production bundler (needs Node.js ≥ 20.19; Debian 13 ships 20.19.2) |
 
 No UI framework and no state library: one global stylesheet (`src/styles.css`) and one React
 context for authentication.
@@ -21,7 +21,7 @@ context for authentication.
 ```
 frontend/
 ├── index.html               <div id="root"> + <script type="module" src="/src/main.jsx">
-├── vite.config.js           dev proxy /api → :8000, /api/terminal/ws → :8001
+├── vite.config.js           dev proxy /api → :8000, /api/terminal/ws → :8001; build writes dist/licenses.md
 ├── package.json
 └── src/
     ├── main.jsx             mounts <StrictMode><BrowserRouter><AuthProvider><App/>
@@ -253,7 +253,7 @@ flowchart LR
         V -- "/api/terminal/ws (ws)" --> P1["privd :8001"]
     end
     subgraph Prod["Production (npm run build)"]
-        SRC["src/*.jsx"] --> VB["vite build"] --> DIST["dist/index.html<br/>dist/assets/index-[hash].js|css"]
+        SRC["src/*.jsx"] --> VB["vite build"] --> DIST["dist/index.html<br/>dist/assets/index-[hash].js|css<br/>dist/licenses.md"]
         DIST -- "install.sh rsync" --> WWW["/var/www/homeacces"]
         B2["Browser :443"] --> NG["nginx"] --> WWW
         NG -- "/api" --> G["gunicorn<br/>/run/homeacces-api.sock"]
@@ -270,6 +270,10 @@ npm run dev       # http://localhost:5173 (needs the API on :8000)
 npm run build     # → dist/
 npm run preview   # serve dist/ locally
 ```
+
+The minifier removes license comments from the bundle, so the build writes the licenses of all
+bundled dependencies (React, React Router, xterm.js, …) to `dist/licenses.md` instead
+(`build.license` in `vite.config.js`). nginx serves it at `/licenses.md`.
 
 ## 5.9 Adding a page
 

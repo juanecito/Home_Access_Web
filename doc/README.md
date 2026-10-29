@@ -45,7 +45,7 @@ flowchart LR
 | Terminal transport | `websockets` (asyncio) | 14.1 |
 | Database | SQLite 3 (WAL mode) | Debian 13 package |
 | UI | React + React Router | 18.3.1 / 6.30.6 |
-| Build tool | Vite | 5.4.21 |
+| Build tool | Vite (Rolldown) | 8.3.5 |
 | Terminal emulator | xterm.js + fit addon | 5.5.0 / 0.10.0 |
 | System login | Linux-PAM through `ctypes` | Debian 13 package |
 
