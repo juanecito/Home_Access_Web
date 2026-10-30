@@ -9,7 +9,7 @@ User=homeacces
 Group=homeacces
 WorkingDirectory=/opt/homeacces/backend
 EnvironmentFile=/etc/homeacces/homeacces.env
-# Two workers is plenty for a Raspberry Pi; raise on a Pi 5 if needed.
+# Two workers is plenty for a small server; raise on a machine with more cores if needed.
 # No --bind: gunicorn listens on the socket passed by homeacces.socket (/run/homeacces-api.sock).
 ExecStart=/opt/homeacces/venv/bin/gunicorn --workers 2 --access-logfile - wsgi:app
 Restart=on-failure

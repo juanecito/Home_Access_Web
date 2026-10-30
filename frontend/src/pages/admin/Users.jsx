@@ -4,7 +4,7 @@ import { useAuth } from '../../AuthContext.jsx';
 import Avatar from '../../Avatar.jsx';
 import PasswordInput from '../../PasswordInput.jsx';
 
-// Local accounts only: system (PAM) accounts get their name, password and role from the Pi.
+// Local accounts only: system (PAM) accounts get their name, password and role from the server.
 function EditUser({ user, isSelf, onClose, onSaved }) {
   const dialogRef = useRef(null);
   const [form, setForm] = useState({ username: user.username, role: user.role, password: '' });

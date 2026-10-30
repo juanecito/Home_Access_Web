@@ -4,7 +4,7 @@
 
 The UI lives in `frontend/`. It is a **React 18** single-page application built with **Vite**.
 In production, the build output (`frontend/dist/`) is plain static files served by nginx from
-`/var/www/homeacces`; there is no Node.js process on the Pi at runtime.
+`/var/www/homeacces`; there is no Node.js process on the server at runtime.
 
 | Dependency | Use |
 |---|---|

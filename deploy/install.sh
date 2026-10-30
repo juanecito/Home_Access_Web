@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install or update HomeAcces on Debian 13 (Raspberry Pi OS / Debian trixie).
+# Install or update HomeAcces on Debian 13 (trixie).
 # Run from the project root:  sudo ./deploy/install.sh
 #
 # Set SKIP_FRONTEND_BUILD=1 to use an existing frontend/dist (e.g. built on a faster machine).

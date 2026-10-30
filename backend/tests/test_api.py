@@ -317,20 +317,20 @@ def test_activity_log(app):
 # ---------------------------------------------------------------- PAM + terminal tickets
 
 class FakePrivd:
-    """Stands in for homeacces-privd: one system account 'pi' (password 'raspberry')."""
+    """Stands in for homeacces-privd: one system account 'demo' (password 'demo1234')."""
 
     def __init__(self):
-        self.groups = ["pi", "homeacces-pam", "sudo"]
+        self.groups = ["demo", "homeacces-pam", "sudo"]
         self.account_ok = True
         self.calls = []
 
     def __call__(self, op, **params):
         self.calls.append(op)
         user = params.get("username")
-        if op == "pam_auth" and user == "pi" and params.get("password") == "raspberry":
-            return {"ok": True, "username": "pi", "groups": self.groups}
-        if op == "pam_account" and user == "pi" and self.account_ok:
-            return {"ok": True, "username": "pi", "groups": self.groups}
+        if op == "pam_auth" and user == "demo" and params.get("password") == "demo1234":
+            return {"ok": True, "username": "demo", "groups": self.groups}
+        if op == "pam_account" and user == "demo" and self.account_ok:
+            return {"ok": True, "username": "demo", "groups": self.groups}
         return {"ok": False, "error": "denied"}
 
 
@@ -343,7 +343,7 @@ def privd(app, monkeypatch):
     return fake
 
 
-def pam_login(client, username="pi", password="raspberry"):
+def pam_login(client, username="demo", password="demo1234"):
     return client.post("/api/auth/login", json={"username": username, "password": password, "method": "pam"})
 
 
@@ -364,9 +364,9 @@ def test_pam_login_creates_user_with_role_from_groups(client, privd):
 
     assert pam_login(client, password="wrong").status_code == 401
     # A PAM account cannot be used with the local method (its password_hash is unusable).
-    assert login(client, "pi", "raspberry").status_code == 401
+    assert login(client, "demo", "demo1234").status_code == 401
 
-    privd.groups = ["pi", "homeacces-pam"]
+    privd.groups = ["demo", "homeacces-pam"]
     assert pam_login(client).json["user"]["role"] == "user"
 
 
@@ -382,7 +382,7 @@ def test_pam_refresh_rechecks_account(client, privd):
 def test_pam_cannot_take_over_local_account(app, privd):
     alice = app.test_client()
     with app.app_context():
-        get_db().execute("INSERT INTO users (username, password_hash) VALUES ('pi', ?)", (hash_password("x" * 10),))
+        get_db().execute("INSERT INTO users (username, password_hash) VALUES ('demo', ?)", (hash_password("x" * 10),))
         get_db().commit()
     assert pam_login(alice).status_code == 409
 
@@ -416,7 +416,7 @@ def test_terminal_ticket_requires_pam_session(app, privd):
     r = pam.post("/api/terminal/ticket", headers=csrf(pam))
     assert r.status_code == 200
     claims = pyjwt.decode(r.json["ticket"], app.config["SECRET_KEY"], algorithms=["HS256"])
-    assert claims["type"] == "terminal" and claims["pam_user"] == "pi"
+    assert claims["type"] == "terminal" and claims["pam_user"] == "demo"
     # A ticket is not an access token.
     assert pam.get("/api/items", headers={"Authorization": f"Bearer {r.json['ticket']}"}).status_code == 401
 
@@ -424,9 +424,9 @@ def test_terminal_ticket_requires_pam_session(app, privd):
 def test_pam_users_managed_by_system(app, privd):
     pam = app.test_client()
     uid = pam_login(pam).json["user"]["id"]
-    h = csrf(pam)  # pi is admin through sudo
+    h = csrf(pam)  # demo is admin through sudo
     assert pam.put(f"/api/users/{uid}", json={"role": "user"}, headers=h).status_code == 400
-    assert pam.put("/api/auth/password", json={"current_password": "raspberry", "new_password": "newpass1234"},
+    assert pam.put("/api/auth/password", json={"current_password": "demo1234", "new_password": "newpass1234"},
                    headers=h).status_code == 400
 
 
@@ -599,16 +599,16 @@ def test_ssh_profiles_crud(client):
     h = csrf(client)
     assert client.get("/api/ssh/profiles").json == {"profiles": [], "enabled": True}
 
-    r = client.post("/api/ssh/profiles", json={"name": "Pi", "host": "Pi.Local", "username": "pi"}, headers=h)
+    r = client.post("/api/ssh/profiles", json={"name": "NAS", "host": "Server.Local", "username": "demo"}, headers=h)
     assert r.status_code == 201
     profile = r.json["profile"]
-    assert profile["host"] == "pi.local" and profile["port"] == 22 and profile["has_key"] is False
+    assert profile["host"] == "server.local" and profile["port"] == 22 and profile["has_key"] is False
     pid = profile["id"]
-    dup = client.post("/api/ssh/profiles", json={"name": "Pi", "host": "x", "username": "pi"}, headers=h)
+    dup = client.post("/api/ssh/profiles", json={"name": "NAS", "host": "x", "username": "demo"}, headers=h)
     assert dup.status_code == 409
 
     # The key is write-only: only has_key is ever returned. Omitting it keeps it, null removes it.
-    body = {"name": "Pi", "host": "[2001:DB8::1]", "port": 2222, "username": "pi", "private_key": KEY + "\r\n"}
+    body = {"name": "NAS", "host": "[2001:DB8::1]", "port": 2222, "username": "demo", "private_key": KEY + "\r\n"}
     r = client.put(f"/api/ssh/profiles/{pid}", json=body, headers=h)
     assert r.json["profile"]["has_key"] is True and r.json["profile"]["host"] == "2001:db8::1"
     assert KEY not in r.get_data(as_text=True) and KEY not in client.get("/api/ssh/profiles").get_data(as_text=True)
@@ -629,7 +629,7 @@ def test_ssh_profiles_crud(client):
 ])
 def test_ssh_profile_validation(client, change):
     register(client)
-    body = {"name": "ok", "host": "example.org", "port": 22, "username": "pi", **change}
+    body = {"name": "ok", "host": "example.org", "port": 22, "username": "demo", **change}
     assert client.post("/api/ssh/profiles", json=body, headers=csrf(client)).status_code == 400
 
 
@@ -679,9 +679,9 @@ def test_ssh_forget_host_key(app):
     alice, admin = app.test_client(), app.test_client()
     register(alice)
     h = csrf(alice)
-    p22 = alice.post("/api/ssh/profiles", json={"name": "a", "host": "pi.local", "username": "u"},
+    p22 = alice.post("/api/ssh/profiles", json={"name": "a", "host": "server.local", "username": "u"},
                      headers=h).json["profile"]
-    p2222 = alice.post("/api/ssh/profiles", json={"name": "b", "host": "pi.local", "port": 2222, "username": "u"},
+    p2222 = alice.post("/api/ssh/profiles", json={"name": "b", "host": "server.local", "port": 2222, "username": "u"},
                        headers=h).json["profile"]
     assert alice.delete(f"/api/ssh/profiles/{p22['id']}/host-key", headers=h).json == {"removed": 0}
 
@@ -690,11 +690,11 @@ def test_ssh_forget_host_key(app):
         path = known_hosts_path(alice_id)
     os.makedirs(os.path.dirname(path))
     with open(path, "w") as f:
-        f.write("# comment\npi.local ssh-ed25519 AAAA1\n[pi.local]:2222 ssh-ed25519 AAAA2\n"
-                "other,PI.LOCAL ecdsa-sha2-nistp256 AAAA3\n@revoked pi.local ssh-rsa AAAA4\n")
+        f.write("# comment\nserver.local ssh-ed25519 AAAA1\n[server.local]:2222 ssh-ed25519 AAAA2\n"
+                "other,SERVER.LOCAL ecdsa-sha2-nistp256 AAAA3\n@revoked server.local ssh-rsa AAAA4\n")
     assert alice.delete(f"/api/ssh/profiles/{p22['id']}/host-key", headers=h).json == {"removed": 3}
     with open(path) as f:
-        assert f.read() == "# comment\n[pi.local]:2222 ssh-ed25519 AAAA2\n"
+        assert f.read() == "# comment\n[server.local]:2222 ssh-ed25519 AAAA2\n"
     assert alice.delete(f"/api/ssh/profiles/{p2222['id']}/host-key", headers=h).json == {"removed": 1}
 
     # Deleting the user forgets its host keys.

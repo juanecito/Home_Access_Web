@@ -36,7 +36,7 @@ export default function Account() {
       <>
         <div className="card narrow">
           {header}
-          <p>Your password and role come from the Raspberry Pi system account. Change the password with{' '}
+          <p>Your password and role come from the server's system account. Change the password with{' '}
             <code>passwd</code> in the terminal.</p>
         </div>
         <AvatarSettings />

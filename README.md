@@ -1,9 +1,9 @@
-# HomeAcces — lightweight web app for Raspberry Pi (Debian 13)
+# HomeAcces — lightweight web app for Debian 13
 
 A small full-stack site: **nginx** serves a **React** UI and proxies `/api` to a **Python 3 (Flask)**
 API backed by **SQLite**. Authentication uses **JWT** stored in **HttpOnly cookies**, with CSRF
 protection, refresh-token rotation and login throttling. Users can sign in with a HomeAcces account
-or with their **Raspberry Pi system account (PAM)**; PAM sessions get a **web terminal** (xterm.js).
+or with their **Linux system account (PAM)**; PAM sessions get a **web terminal** (xterm.js).
 Every user also gets an **SSH menu**: saved SSH connections opened in the browser with the OpenSSH client.
 
 ```
@@ -42,10 +42,10 @@ frontend/           React + Vite UI (login/register, items, SSH, account, admin:
 deploy/             nginx site, systemd unit, env template, install scripts
 ```
 
-## Install on the Raspberry Pi
+## Install on the server
 
 ```bash
-git clone <this repo> homeacces && cd homeacces     # or copy the folder to the Pi
+git clone <this repo> homeacces && cd homeacces     # or copy the folder to the server
 sudo ./deploy/install.sh
 sudo ./deploy/create-admin.sh admin
 ```
@@ -53,10 +53,10 @@ sudo ./deploy/create-admin.sh admin
 To let a system user sign in with PAM and use the terminal:
 
 ```bash
-sudo usermod -aG homeacces-pam pi
+sudo usermod -aG homeacces-pam <user>
 ```
 
-Open `https://<pi-hostname>.local/`. The certificate is self-signed, so the browser will warn once;
+Open `https://<hostname>.local/`. The certificate is self-signed, so the browser will warn once;
 for a public site, replace `/etc/ssl/homeacces/homeacces.*` with a real certificate (e.g. certbot).
 
 | What | Where |
@@ -90,27 +90,27 @@ Backup: `sqlite3 /var/lib/homeacces/homeacces.sqlite3 ".backup /root/homeacces-$
 ### Building the UI on another machine (`SKIP_FRONTEND_BUILD`)
 
 Node is only needed to build the UI. The site itself runs without it: nginx serves the static
-files in `frontend/dist` (about 0.5 MB), and the backend is Python. Building on a Pi 3 or older
-is slow and `node_modules` takes about 80 MB, so you can build elsewhere instead:
+files in `frontend/dist` (about 0.5 MB), and the backend is Python. Building on a slow, low-memory
+machine is slow and `node_modules` takes about 80 MB, so you can build elsewhere instead:
 
 ```bash
 # on a faster machine (any OS with Node)
 cd frontend && npm ci && npm run build
-rsync -a dist/ pi@raspberrypi.local:homeacces/frontend/dist/
+rsync -a dist/ user@server.local:homeacces/frontend/dist/
 
-# on the Pi
+# on the server
 sudo SKIP_FRONTEND_BUILD=1 ./deploy/install.sh
 ```
 
 With `SKIP_FRONTEND_BUILD=1`, `install.sh` does not install `nodejs`/`npm` and does not run npm.
 It copies the existing `frontend/dist` to `/var/www/homeacces`, and stops with
 `frontend/dist is missing` if there is no `frontend/dist/index.html`. Rebuild and copy `dist/`
-again whenever the frontend changes; otherwise the Pi keeps serving the old UI.
+again whenever the frontend changes; otherwise the server keeps serving the old UI.
 
 ## Dev container (Docker, Debian 13)
 
 `.devcontainer/` runs the whole site in a Debian 13 container: Python, Node, nginx, PAM and the
-web terminals (local and SSH), as on the Pi.
+web terminals (local and SSH), as in production.
 
 **VS Code:** install the *Dev Containers* extension, then run **Dev Containers: Reopen in Container**.
 On first start it installs the dependencies, creates the database and starts the site. Open
@@ -119,7 +119,7 @@ On first start it installs the dependencies, creates the database and starts the
 | Account | Login as | Password | Gets |
 |---|---|---|---|
 | `admin` | HomeAcces account | `admin1234` | web admin |
-| `pi` | System account (PAM) | `raspberry` | web admin + terminal |
+| `demo` | System account (PAM) | `demo1234` | web admin + terminal |
 
 Both accounts exist only inside the container.
 
@@ -194,9 +194,9 @@ All bodies are JSON. Errors look like `{"error": "...", "status": 4xx}`.
 **Scripts (Bearer):** no CSRF header is needed.
 
 ```bash
-TOKEN=$(curl -sk https://pi.local/api/auth/token -H 'Content-Type: application/json' \
+TOKEN=$(curl -sk https://server.local/api/auth/token -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"..."}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-curl -sk https://pi.local/api/items -H "Authorization: Bearer $TOKEN"
+curl -sk https://server.local/api/items -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Items — users see their own, admins see all
@@ -306,10 +306,10 @@ The private key is write-only: the API only reports `has_key`. SSH sessions clos
 - xterm.js needs `style-src 'unsafe-inline'` in the CSP, which nginx allows. Scripts are still `'self'` only.
 - Turn the feature off with `HOMEACCES_PAM_ENABLED=0` and `sudo systemctl disable --now homeacces-privd`.
 
-**SSH menu** — every user can open SSH connections from the Pi, so:
+**SSH menu** — every user can open SSH connections from the server, so:
 
 - `homeacces-ssh` runs the OpenSSH client as the unprivileged `homeacces` user (hardened systemd
-  unit), never as root. Connections come from the Pi's address, so they can reach hosts on its network.
+  unit), never as root. Connections come from the server's address, so they can reach hosts on its network.
 - `ssh` is started without a config file and without escape character, port/agent/X11 forwarding,
   local commands, agent or connection sharing; it only offers the connection's own key. Host, port
   and remote user are validated so they cannot be read as options.
@@ -333,7 +333,7 @@ The private key is write-only: the API only reports `has_key`. SSH sessions clos
   login, register, token and password change (nginx). Wrong current passwords on password change are
   throttled per account too.
 - Self-registration is off by default. When it is on, a system username is reported as "username
-  already taken", so registration cannot be used to list the Pi's accounts.
+  already taken", so registration cannot be used to list the server's accounts.
 - gunicorn listens on the Unix socket `/run/homeacces-api.sock` (from `homeacces.socket`), which only
   nginx (`www-data`) can connect to, so local users cannot bypass nginx or spoof their IP. The systemd
   unit runs it as the unprivileged `homeacces` user with a read-only filesystem except `/var/lib/homeacces`.

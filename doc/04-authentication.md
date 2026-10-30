@@ -12,7 +12,7 @@ Code: `backend/app/auth.py`, `backend/app/terminal.py`, `backend/app/ssh.py`, `b
 flowchart LR
     subgraph Methods["Sign-in methods"]
         L["local<br/>username + password in SQLite<br/>(scrypt)"]
-        P["pam<br/>Raspberry Pi system account<br/>(via homeacces-privd)"]
+        P["pam<br/>Linux system account<br/>(via homeacces-privd)"]
     end
     subgraph Clients["Client types"]
         BR["Browser<br/>POST /api/auth/login<br/>→ HttpOnly cookies + CSRF"]
@@ -227,14 +227,14 @@ sequenceDiagram
     participant L as libpam (/etc/pam.d/homeacces)
     participant D as SQLite
 
-    B->>A: POST /api/auth/login {method:"pam", username:"pi", password}
+    B->>A: POST /api/auth/login {method:"pam", username:"demo", password}
     A->>A: PAM_ENABLED? username matches ^[a-z_][a-z0-9_.-]{0,31}$ ? throttle?
-    A->>S: connect + {"op":"pam_auth","username":"pi","password":"…"}
+    A->>S: connect + {"op":"pam_auth","username":"demo","password":"…"}
     H->>H: SO_PEERCRED: peer uid ∈ {0, homeacces}?
-    H->>L: pam_start("homeacces","pi") → pam_authenticate → pam_acct_mgmt
+    H->>L: pam_start("homeacces","demo") → pam_authenticate → pam_acct_mgmt
     L-->>H: PAM_SUCCESS
     H->>H: policy: uid ≥ 1000 and in group homeacces-pam
-    H-->>A: {"ok":true,"username":"pi","groups":[…,"sudo"]}
+    H-->>A: {"ok":true,"username":"demo","groups":[…,"sudo"]}
     A->>D: upsert users row (auth_source='pam', password_hash='!')<br/>role = admin if "sudo" ∈ groups else user
     Note over A,D: 409 if a *local* account already uses this name
     A-->>B: cookies with amr="pam"
@@ -244,10 +244,10 @@ Safeguards:
 
 - Only members of **`homeacces-pam`** with **uid ≥ 1000** can sign in; `root` and daemons never can.
 - The policy is re-checked on **every refresh** (every 15 min) and **every terminal start**, so
-  `gpasswd -d pi homeacces-pam` or `usermod -L pi` ends web access quickly.
+  `gpasswd -d <user> homeacces-pam` or `usermod -L <user>` ends web access quickly.
 - New local accounts cannot be registered under an existing system username (`pwd.getpwnam`),
   and a PAM login cannot take over a local account with the same name. Self-registration answers
-  "username already taken" for system usernames, so it cannot be used to list the Pi's accounts
+  "username already taken" for system usernames, so it cannot be used to list the server's accounts
   (only admins creating users see "reserved for a system account"). Self-registration is off by default.
 - PAM users in `HOMEACCES_PAM_ADMIN_GROUP` (default `sudo`) become web admins — they can already
   become root, so nothing new is granted.
@@ -265,7 +265,7 @@ sequenceDiagram
     participant A as Flask /api/terminal/ticket
     participant N as nginx
     participant H as homeacces-privd :8001
-    participant SH as runuser --login pi
+    participant SH as runuser --login demo
 
     T->>A: POST /api/terminal/ticket (cookie + CSRF)
     A->>A: require amr=="pam" and auth_source=="pam"
@@ -278,7 +278,7 @@ sequenceDiagram
     H->>H: verify JWT signature/type/exp, jti not used before
     H->>H: policy (uid, group) + pam_acct_mgmt
     H->>H: limits: ≤ 4 per user, ≤ 16 total
-    H->>SH: openpty() + setsid --ctty runuser --login pi
+    H->>SH: openpty() + setsid --ctty runuser --login demo
     loop session
         T->>H: {"type":"input","data":"ls\r"} / {"type":"resize",…}
         H-->>T: binary frames (raw terminal output)
@@ -335,7 +335,7 @@ sequenceDiagram
 |---|---|
 | Cross-site WebSocket hijacking, ticket replay | Same as the local terminal: CSRF-protected ticket POST, `Origin` == `Host`, single-use `jti`, 30 s lifetime |
 | Using someone else's connection | Profiles are filtered by `owner_id` in the API **and** again in homeacces-ssh against the ticket's `sub`; admins cannot see others' profiles either |
-| Escaping from SSH to the Pi | `ssh` runs as the unprivileged `homeacces` user in a hardened unit (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`, no capabilities); no `ssh_config`, no escape character, no forwardings, no `LocalCommand`, no agent, no connection sharing |
+| Escaping from SSH to the server | `ssh` runs as the unprivileged `homeacces` user in a hardened unit (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`, no capabilities); no `ssh_config`, no escape character, no forwardings, no `LocalCommand`, no agent, no connection sharing |
 | Option injection through host / user | Strict validation (no leading `-`, no `%`/`$`, no spaces), destination after `--` |
 | Trusting another user's servers / MITM | One `known_hosts` file per web user, no global file; new keys are confirmed by the user, changed keys are refused until the user forgets the old one ("Forget host key") |
 | Password theft from the database | Passwords and passphrases are never stored, only typed in the terminal |
@@ -346,7 +346,7 @@ also in a 0600 temp file in the service's private `/tmp`. Anyone who can read th
 the `homeacces` user, database backups) can read them. They are never sent back to the browser.
 Users should save only keys protected by a passphrase (`ssh` asks for it in the terminal).
 
-The SSH client connects **from the Pi**, so users can reach any host the Pi can reach (including
+The SSH client connects **from the server**, so users can reach any host the server can reach (including
 the local network). Admins can switch the SSH menu off in Admin → Settings (new tickets are refused;
 open sessions continue until closed or idle), or remove the feature with
 `sudo systemctl disable --now homeacces-ssh`.
@@ -354,9 +354,9 @@ open sessions continue until closed or idle), or remove the feature with
 ## 4.9 Bearer tokens for scripts
 
 ```bash
-TOKEN=$(curl -sk https://pi.local/api/auth/token -H 'Content-Type: application/json' \
+TOKEN=$(curl -sk https://server.local/api/auth/token -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"..."}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-curl -sk https://pi.local/api/items -H "Authorization: Bearer $TOKEN"
+curl -sk https://server.local/api/items -H "Authorization: Bearer $TOKEN"
 ```
 
 `/api/auth/token` returns only an access token (no refresh token); request a new one after

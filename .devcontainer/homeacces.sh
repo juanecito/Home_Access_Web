@@ -29,13 +29,13 @@ running() {
 }
 
 start_privd() {
-    # Root, like on the Pi: needed for PAM password checks and runuser. No .pyc files, so root
+    # Root, like in production: needed for PAM password checks and runuser. No .pyc files, so root
     # does not leave root-owned __pycache__ directories in the mounted workspace.
     spawn privd sudo bash -c "set -a; . '$ENV_FILE'; set +a; export HOMEACCES_PRIVD_CLIENT_USER=\${HOMEACCES_PRIVD_CLIENT_USER:-$(id -un)}; cd '$ROOT/backend'; exec '$VENV/bin/python' -B -m homeacces_privd"
 }
 
 start_ssh() {
-    # Unprivileged, like on the Pi (there it runs as the homeacces user).
+    # Unprivileged, like in production (there it runs as the homeacces user).
     spawn ssh bash -c "cd '$ROOT/backend' && exec '$VENV/bin/python' -m homeacces_ssh"
 }
 

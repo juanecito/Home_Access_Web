@@ -41,7 +41,7 @@ function ProfileForm({ initial, onSave, onCancel, submitLabel }) {
     <form className="item-form" onSubmit={submit}>
       <label>
         <span>Name</span>
-        <input placeholder="e.g. Living-room Pi" value={name} onChange={(e) => setName(e.target.value)}
+        <input placeholder="e.g. Living-room NAS" value={name} onChange={(e) => setName(e.target.value)}
                maxLength={64} required />
       </label>
       <div className="ssh-target">
@@ -56,7 +56,7 @@ function ProfileForm({ initial, onSave, onCancel, submitLabel }) {
         </label>
         <label>
           <span>Remote user</span>
-          <input placeholder="e.g. pi" value={username} onChange={(e) => setUsername(e.target.value)}
+          <input placeholder="e.g. admin" value={username} onChange={(e) => setUsername(e.target.value)}
                  maxLength={64} required autoCapitalize="off" spellCheck={false} />
         </label>
       </div>

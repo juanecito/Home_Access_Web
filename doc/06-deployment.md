@@ -2,7 +2,7 @@
 
 [← Frontend](05-frontend.md) · [Index](README.md)
 
-Target: **Raspberry Pi with Debian 13 (trixie) / Raspberry Pi OS**. Everything needed is in
+Target: **a Debian 13 (trixie) server**. Everything needed is in
 `deploy/`:
 
 | File | Installed to | Purpose |
@@ -28,7 +28,7 @@ flowchart TB
     subgraph LAN["Home network"]
         PC["Laptop / phone browser"]
     end
-    subgraph Pi["Raspberry Pi — Debian 13"]
+    subgraph Server["Server — Debian 13"]
         direction TB
         NGINX["nginx<br/>:80 → redirect<br/>:443 TLS (self-signed or certbot)"]
         subgraph sd["systemd"]
@@ -44,7 +44,7 @@ flowchart TB
         ETC[("/etc/homeacces/homeacces.env<br/>/etc/ssl/homeacces/*")]
     end
     RS["Remote SSH servers"]
-    PC -- "https://raspberrypi.local" --> NGINX
+    PC -- "https://server.local" --> NGINX
     NGINX --> WWW
     NGINX --> SOCK --> API
     NGINX --> PRIV
@@ -62,18 +62,18 @@ flowchart TB
 ## 6.2 First installation
 
 ```bash
-# on the Pi
+# on the server
 git clone <this repo> homeacces && cd homeacces    # or copy the folder
 sudo ./deploy/install.sh
 sudo ./deploy/create-admin.sh admin                # prompts for the password twice
 
 # optional: allow a system user to sign in with PAM and use the web terminal
-sudo usermod -aG homeacces-pam pi
+sudo usermod -aG homeacces-pam <user>
 ```
 
-Then open `https://<pi-hostname>.local/`. The certificate is self-signed, so the browser warns once.
+Then open `https://<hostname>.local/`. The certificate is self-signed, so the browser warns once.
 The SSH menu is available to every user right away; switch it off in Admin → Settings if you do
-not want users to open SSH connections from the Pi.
+not want users to open SSH connections from the server.
 
 ### What `install.sh` does
 
@@ -114,7 +114,7 @@ Two other choices in `install.sh` are about safety:
   source folder**, because npm runs install scripts of dependencies. If the folder belongs to root,
   the script warns and builds as root; clone the project as a normal user to avoid that.
 
-## 6.3 Files on the Pi
+## 6.3 Files on the server
 
 ```
 /opt/homeacces/
@@ -206,7 +206,7 @@ when you add one.
 
 ### Using a real certificate
 
-For a publicly reachable Pi, replace the self-signed files, e.g. with certbot:
+For a publicly reachable server, replace the self-signed files, e.g. with certbot:
 
 ```bash
 sudo apt install certbot
@@ -239,33 +239,33 @@ flowchart LR
 | Writable | `/var/lib/homeacces`, `/var/log/homeacces` only | whole system (shells must behave like SSH logins) | `/var/lib/homeacces` only (known_hosts files) + private `/tmp` (key files of open sessions) |
 | Hardening | `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `PrivateDevices`, empty `CapabilityBoundingSet`, `RestrictAddressFamilies`, `RestrictSUIDSGID`, … | `ProtectKernelModules/Logs`, `ProtectClock`, `RestrictRealtime`, `LockPersonality`, `UMask=0077`, `KillMode=mixed` | as `homeacces.service` but without `PrivateDevices` (ssh needs `/dev/tty` and PTYs), `UMask=0077` |
 
-Raise `--workers` on a Pi 5 if needed (rule of thumb: 2 × cores; each worker uses ~30–40 MB).
+Raise `--workers` on a machine with more cores if needed (rule of thumb: 2 × cores; each worker uses ~30–40 MB).
 
 ## 6.7 Updating
 
 ```mermaid
 sequenceDiagram
     participant Dev as You
-    participant Pi as Raspberry Pi
-    Dev->>Pi: git pull (or copy the new folder)
-    Dev->>Pi: sudo ./deploy/install.sh
-    Pi->>Pi: rsync code, pip install, gen-env --update
-    Pi->>Pi: flask init-db (migrations)
-    Pi->>Pi: build + rsync UI
-    Pi->>Pi: reload nginx, restart services
-    Note over Pi: Sessions survive (same secret key, same DB)
+    participant Srv as Server
+    Dev->>Srv: git pull (or copy the new folder)
+    Dev->>Srv: sudo ./deploy/install.sh
+    Srv->>Srv: rsync code, pip install, gen-env --update
+    Srv->>Srv: flask init-db (migrations)
+    Srv->>Srv: build + rsync UI
+    Srv->>Srv: reload nginx, restart services
+    Note over Srv: Sessions survive (same secret key, same DB)
 ```
 
-### Building the UI elsewhere (slow Pi)
+### Building the UI elsewhere (slow server)
 
-Building with Node on a Pi 3 or older is slow. Build on another machine and copy the result:
+Building with Node on a slow, low-memory machine is slow. Build on another machine and copy the result:
 
 ```bash
 # on a faster machine
 cd frontend && npm ci && npm run build
-rsync -a dist/ pi@raspberrypi.local:homeacces/frontend/dist/
+rsync -a dist/ user@server.local:homeacces/frontend/dist/
 
-# on the Pi
+# on the server
 sudo SKIP_FRONTEND_BUILD=1 ./deploy/install.sh
 ```
 
@@ -273,9 +273,9 @@ sudo SKIP_FRONTEND_BUILD=1 ./deploy/install.sh
 
 ```bash
 sudo ./deploy/create-admin.sh alice          # create admin, or reset password + promote
-sudo usermod -aG homeacces-pam pi            # allow PAM login + terminal
-sudo gpasswd -d pi homeacces-pam             # revoke (effective at next refresh, ≤ 15 min)
-sudo usermod -aG sudo pi                     # PAM user becomes web admin (at next refresh)
+sudo usermod -aG homeacces-pam <user>        # allow PAM login + terminal
+sudo gpasswd -d <user> homeacces-pam         # revoke (effective at next refresh, ≤ 15 min)
+sudo usermod -aG sudo <user>                 # PAM user becomes web admin (at next refresh)
 ```
 
 ## 6.9 Logs and monitoring
@@ -313,7 +313,7 @@ Restore steps are in [Database §3.6](03-database.md#36-maintenance).
 
 ### Dev container (Docker, Debian 13) — recommended
 
-`.devcontainer/` reproduces the Pi: Python, Node, nginx, PAM, the terminal and the SSH client.
+`.devcontainer/` reproduces the production server: Python, Node, nginx, PAM, the terminal and the SSH client.
 
 ```mermaid
 flowchart TB
@@ -336,7 +336,7 @@ flowchart TB
             SS2["ssh :8002"]
             NX["nginx :8443<br/>real deploy config"]
         end
-        PI["test system user pi / raspberry<br/>groups homeacces-pam, sudo"]
+        DU["test system user demo / demo1234<br/>groups homeacces-pam, sudo"]
     end
     VS --> PC --> HS --> devmode
     BRW --> V
@@ -346,7 +346,7 @@ flowchart TB
 | Account | Sign in as | Password | Gets |
 |---|---|---|---|
 | `admin` | HomeAcces account | `admin1234` | web admin |
-| `pi` | System account (PAM) | `raspberry` | web admin + terminal |
+| `demo` | System account (PAM) | `demo1234` | web admin + terminal |
 
 ```bash
 .devcontainer/homeacces.sh start dev    # Flask --debug + Vite → http://localhost:5173 (default)
@@ -392,7 +392,7 @@ your own user with the same environment (`.venv/bin/python -m homeacces_ssh`, po
 | SSH terminal shows *[connection closed]* right away | `homeacces-ssh` not running (nginx logs a 502) | `systemctl status homeacces-ssh`, `journalctl -u homeacces-ssh` |
 | SSH: *Host key verification failed* / *REMOTE HOST IDENTIFICATION HAS CHANGED* | The server's key differs from the one the user accepted earlier | If the change is expected (server reinstalled): SSH → **Forget host key**, then connect and check the new key |
 | SSH: **Connect** disabled, ticket 403 | An admin switched the SSH menu off | Admin → Settings → SSH terminal |
-| Signed out every 15 min | Refresh failing — clock skew or cookies blocked | Check Pi time (`timedatectl`), browser cookie settings |
+| Signed out every 15 min | Refresh failing — clock skew or cookies blocked | Check server time (`timedatectl`), browser cookie settings |
 | Login works over IP but cookies are missing in dev | `Secure` cookies on plain HTTP | `HOMEACCES_COOKIE_SECURE=0` in development only |
 | 429 *too many failed attempts* | Throttling (app or nginx) | Wait 15 min (app) / 1 min (nginx) |
 | Everyone signed out after update | Secret key changed | Expected after `--rotate-secret` |

@@ -2,10 +2,10 @@
 
 [← Index](README.md) · Next: [Backend →](02-backend.md)
 
-HomeAcces is a small full-stack web application designed to run on a Raspberry Pi with Debian 13.
+HomeAcces is a small full-stack web application designed to run on a small Debian 13 server.
 It provides:
 
-- user accounts (local accounts stored in SQLite, or Raspberry Pi **system accounts** through PAM),
+- user accounts (local accounts stored in SQLite, or Linux **system accounts** through PAM),
 - a personal list of **items**, optionally with admin-defined **item types** carrying typed fields,
 - an **admin area** (user management, runtime settings, activity log),
 - a **web terminal** (a real login shell in the browser) for users signed in with a system account,
@@ -13,7 +13,7 @@ It provides:
 
 ## 1.1 Components and processes
 
-Four long-running processes cooperate on the Pi. Each runs with the least privilege it needs.
+Four long-running processes cooperate on the server. Each runs with the least privilege it needs.
 
 ```mermaid
 flowchart TB
@@ -22,7 +22,7 @@ flowchart TB
         CLI["Scripts / curl<br/>(Bearer token)"]
     end
 
-    subgraph Pi["Raspberry Pi"]
+    subgraph Server["Server"]
         direction TB
         subgraph nginxBox["nginx (www-data)"]
             NG[":80 → 301 to HTTPS<br/>:443 TLS"]

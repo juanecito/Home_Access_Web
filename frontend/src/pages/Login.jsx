@@ -38,7 +38,7 @@ export default function Login() {
         </div>
       )}
       {isLogin && method === 'pam' && (
-        <p className="muted">Sign in with your Raspberry Pi user (PAM). This enables the web terminal.</p>
+        <p className="muted">Sign in with your system user (PAM). This enables the web terminal.</p>
       )}
       <label>
         Username

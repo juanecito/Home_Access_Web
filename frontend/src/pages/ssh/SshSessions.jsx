@@ -14,7 +14,7 @@ export function useSshSessions() {
   return useContext(SshSessionsContext);
 }
 
-// "Pi", then "Pi (2)", "Pi (3)"… for more sessions to the same connection.
+// "NAS", then "NAS (2)", "NAS (3)"… for more sessions to the same connection.
 function tabLabel(sessions, profile) {
   const taken = new Set(sessions.filter((s) => s.profile.id === profile.id).map((s) => s.label));
   let label = profile.name;

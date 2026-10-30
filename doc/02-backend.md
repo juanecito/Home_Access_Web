@@ -279,7 +279,7 @@ in a separate table named `item_type_<type id>`, one row per item.
 ```mermaid
 flowchart LR
     subgraph common["items (common data)"]
-        I1["id=7<br/>title='Raspberry Pi 5'<br/>type_id=2"]
+        I1["id=7<br/>title='Home NAS'<br/>type_id=2"]
         I2["id=8<br/>title='Buy milk'<br/>type_id=NULL"]
     end
     subgraph meta["item_types / item_type_fields"]
@@ -399,10 +399,10 @@ flowchart TB
 One JSON line per connection, one JSON line back:
 
 ```
-→ {"op": "pam_auth", "username": "pi", "password": "…"}
-← {"ok": true, "username": "pi", "groups": ["homeacces-pam", "pi", "sudo"]}
+→ {"op": "pam_auth", "username": "demo", "password": "…"}
+← {"ok": true, "username": "demo", "groups": ["demo", "homeacces-pam", "sudo"]}
 
-→ {"op": "pam_account", "username": "pi"}
+→ {"op": "pam_account", "username": "demo"}
 ← {"ok": false, "error": "denied"}
 ```
 

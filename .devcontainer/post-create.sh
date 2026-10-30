@@ -17,7 +17,7 @@ echo "==> Dev configuration ($ENV_FILE)"
 mkdir -p "$ROOT/backend/instance"
 if [[ ! -f "$ENV_FILE" ]]; then
     cat > "$ENV_FILE" <<EOF
-# Dev settings for .devcontainer/homeacces.sh (not used on the Pi). Keep this file private.
+# Dev settings for .devcontainer/homeacces.sh (not used in production). Keep this file private.
 # homeacces.sh sets HOMEACCES_COOKIE_SECURE per mode (dev: 0, prod: 1) and defaults
 # HOMEACCES_PRIVD_CLIENT_USER to the user running it. The database defaults to backend/instance/homeacces.sqlite3.
 HOMEACCES_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')

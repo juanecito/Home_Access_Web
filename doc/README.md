@@ -1,7 +1,7 @@
 # HomeAcces — technical documentation
 
 This folder explains how the HomeAcces website works, from the browser down to the SQLite file
-and the Raspberry Pi system accounts.
+and the Linux system accounts.
 
 | # | Document | What it covers |
 |---|---|---|
@@ -10,14 +10,14 @@ and the Raspberry Pi system accounts.
 | 3 | [Database (SQLite)](03-database.md) | Schema, ER diagram, dynamic `item_type_<id>` tables, migrations, maintenance |
 | 4 | [Authentication & security](04-authentication.md) | Local and PAM login, JWT, cookies, CSRF, refresh rotation, throttling, web terminal and SSH tickets |
 | 5 | [Frontend (React)](05-frontend.md) | Component tree, routing, API client, auth state, pages, web terminal, SSH menu |
-| 6 | [Deployment & operations](06-deployment.md) | Install on the Pi, files on disk, nginx, systemd, configuration, dev container, updates, backups, troubleshooting |
+| 6 | [Deployment & operations](06-deployment.md) | Install on the server, files on disk, nginx, systemd, configuration, dev container, updates, backups, troubleshooting |
 
 ## The project in one picture
 
 ```mermaid
 flowchart LR
     B["Browser<br/>React SPA + xterm.js"]
-    subgraph Pi["Raspberry Pi (Debian 13)"]
+    subgraph Server["Server (Debian 13)"]
         N["nginx :443<br/>TLS, headers, rate limit"]
         S[("/var/www/homeacces<br/>static React build")]
         A["gunicorn + Flask<br/>/run/homeacces-api.sock<br/>user: homeacces"]

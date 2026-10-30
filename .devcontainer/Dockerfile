@@ -1,4 +1,4 @@
-# Development container for HomeAcces: Debian 13 (trixie), same packages as the Raspberry Pi target.
+# Development container for HomeAcces: Debian 13 (trixie), same packages as the production server.
 FROM debian:13
 
 ARG USERNAME=dev
@@ -23,11 +23,11 @@ RUN groupadd --gid "$USER_GID" "$USERNAME" \
  && echo "$USERNAME ALL=(root) NOPASSWD:ALL" > "/etc/sudoers.d/$USERNAME" \
  && chmod 0440 "/etc/sudoers.d/$USERNAME"
 
-# PAM login + web terminal, as on the Pi. "pi" / "raspberry" is a throwaway test account for
+# PAM login + web terminal, as in production. "demo" / "demo1234" is a throwaway test account for
 # this container only: it can sign in with "System account" and is a web admin (group sudo).
 COPY deploy/pam.d/homeacces /etc/pam.d/homeacces
 RUN groupadd --system homeacces-pam \
- && useradd --create-home --shell /bin/bash --groups homeacces-pam,sudo pi \
- && echo 'pi:raspberry' | chpasswd
+ && useradd --create-home --shell /bin/bash --groups homeacces-pam,sudo demo \
+ && echo 'demo:demo1234' | chpasswd
 
 USER $USERNAME

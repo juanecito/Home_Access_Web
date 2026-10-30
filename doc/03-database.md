@@ -6,7 +6,7 @@ HomeAcces stores everything in a single SQLite file:
 
 | Environment | Path |
 |---|---|
-| Raspberry Pi | `/var/lib/homeacces/homeacces.sqlite3` (owner `homeacces`, dir mode 0750) |
+| Server | `/var/lib/homeacces/homeacces.sqlite3` (owner `homeacces`, dir mode 0750) |
 | Dev / local | `backend/instance/homeacces.sqlite3` |
 
 SQLite fits the target well: no server process, tiny memory footprint, a single file to back up.

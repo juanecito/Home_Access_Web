@@ -29,7 +29,7 @@ def settings(tmp_path):
         db.executescript(f.read())
     db.execute("INSERT INTO users (id, username, password_hash) VALUES (1, 'alice', 'x'), (2, 'bob', 'x')")
     db.execute("INSERT INTO ssh_profiles (id, owner_id, name, host, port, username, private_key) VALUES "
-               "(1, 1, 'pi', 'pi.local', 2222, 'pi', NULL), (2, 1, 'key', '127.0.0.1', 1, 'root', ?)", (KEY,))
+               "(1, 1, 'demo', 'server.local', 2222, 'demo', NULL), (2, 1, 'key', '127.0.0.1', 1, 'root', ?)", (KEY,))
     db.commit()
     db.close()
     s = server.Settings({"HOMEACCES_SECRET_KEY": SECRET, "HOMEACCES_DATABASE": str(tmp_path / "db.sqlite3")})
@@ -44,9 +44,9 @@ def ticket(user_id=1, profile_id=1, ttype="ssh"):
 
 
 def test_ssh_command_is_locked_down(settings):
-    argv = server.ssh_command(settings, 7, {"host": "pi.local", "port": 2222, "username": "pi"})
+    argv = server.ssh_command(settings, 7, {"host": "server.local", "port": 2222, "username": "demo"})
     assert argv[1:5] == ["-F", "/dev/null", "-e", "none"]
-    assert argv[-6:] == ["-p", "2222", "-l", "pi", "--", "pi.local"]
+    assert argv[-6:] == ["-p", "2222", "-l", "demo", "--", "server.local"]
     opts = dict(a.split("=", 1) for a in argv[argv.index("-o"):-6] if a != "-o")
     assert opts["UserKnownHostsFile"] == f'"{settings.ssh_dir}/known_hosts/7"'
     assert opts["IdentityFile"] == "none" and opts["IdentityAgent"] == "none"
@@ -97,7 +97,7 @@ def test_session_runs_client_in_pty(settings, tmp_path):
             out = b""
             while b"GOT hello" not in out:
                 out += await asyncio.wait_for(ws.recv(), 5)
-            assert b"-- pi.local" in out and b"30 100" in out
+            assert b"-- server.local" in out and b"30 100" in out
             assert srv.sessions == {1: 1}
             await asyncio.wait_for(ws.wait_closed(), 5)
             assert ws.close_code == 1000

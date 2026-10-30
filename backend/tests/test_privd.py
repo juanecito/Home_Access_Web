@@ -28,7 +28,7 @@ def settings(tmp_path):
     })
 
 
-def ticket(user="pi", ttype="terminal", exp_in=30, jti=None):
+def ticket(user="demo", ttype="terminal", exp_in=30, jti=None):
     now = int(time.time())
     return jwt.encode({"type": ttype, "sub": "1", "pam_user": user, "jti": jti or uuid.uuid4().hex,
                        "iat": now, "exp": now + exp_in}, SECRET, algorithm="HS256")
@@ -42,7 +42,7 @@ def test_real_pam_rejects_bad_password():
 def test_ticket_rules(settings):
     term = server.TerminalServer(settings)
     tok = ticket()
-    assert term.verify_ticket(tok)["pam_user"] == "pi"
+    assert term.verify_ticket(tok)["pam_user"] == "demo"
     with pytest.raises(server.Denied, match="already used"):
         term.verify_ticket(tok)
     with pytest.raises(server.Denied):
@@ -81,11 +81,11 @@ def test_unix_socket_protocol(settings, monkeypatch):
                 reply = json.loads(await reader.readline())
                 writer.close()
                 return reply
-            assert (await ask({"op": "pam_auth", "username": "pi", "password": "good"}))["ok"] is True
-            assert (await ask({"op": "pam_auth", "username": "pi", "password": "bad"}))["ok"] is False
+            assert (await ask({"op": "pam_auth", "username": "demo", "password": "good"}))["ok"] is True
+            assert (await ask({"op": "pam_auth", "username": "demo", "password": "bad"}))["ok"] is False
             assert (await ask({"op": "nope"}))["ok"] is False
             proto.allowed_uids = {0}
-            assert (await ask({"op": "pam_auth", "username": "pi", "password": "good"}))["error"] == "forbidden"
+            assert (await ask({"op": "pam_auth", "username": "demo", "password": "good"}))["error"] == "forbidden"
 
     asyncio.run(scenario())
 
@@ -117,7 +117,7 @@ def test_terminal_session(settings, monkeypatch):
                     out += await asyncio.wait_for(ws.recv(), 5)
                 assert b"30 100" in out  # initial window size applied
                 assert b"/dev/pts/" in out  # running on a PTY
-                assert term.sessions == {"pi": 1}
+                assert term.sessions == {"demo": 1}
 
                 await ws.send(json.dumps({"type": "input", "data": "exit\n"}))
                 await asyncio.wait_for(ws.wait_closed(), 5)
