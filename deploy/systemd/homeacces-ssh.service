@@ -1,0 +1,39 @@
+[Unit]
+Description=HomeAcces SSH terminal (OpenSSH client in the browser)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Unprivileged: it runs the OpenSSH client for web users, and reads their saved connections
+# from the database. ssh is started without config file, escape character or forwardings.
+User=homeacces
+Group=homeacces
+WorkingDirectory=/opt/homeacces/backend
+EnvironmentFile=/etc/homeacces/homeacces.env
+ExecStart=/opt/homeacces/venv/bin/python -m homeacces_ssh
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+# Hardening. Private keys of open sessions are written to the private /tmp (PrivateTmp) and
+# removed when the session ends. PrivateDevices is not used: ssh needs /dev/tty and PTYs.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/homeacces
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

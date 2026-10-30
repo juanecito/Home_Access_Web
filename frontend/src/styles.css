@@ -141,9 +141,38 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; 
   overflow-x: auto; overflow-y: hidden;
 }
 .terminal-host { height: 100%; }
+/* A link or label that looks like a button. */
+.button {
+  display: inline-flex; flex-direction: row; align-items: center; font: inherit; font-weight: 400; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 14px; text-decoration: none;
+}
+.button.secondary { background: transparent; color: var(--text); }
+.button.secondary:hover { background: var(--bg); }
+.file-button input { display: none; }
+textarea.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+.ssh-target { display: grid; grid-template-columns: 2fr 1fr 2fr; gap: 8px; }
+@media (max-width: 600px) { .ssh-target { grid-template-columns: 1fr; } }
 .status { font-size: 0.85rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
 .status.connected { color: var(--success); }
 .status.closed { color: var(--danger); }
+.terminal-page[hidden] { display: none; }
+
+/* SSH: connections tab, then one closable tab per session. */
+.ssh-tabs { align-items: flex-end; }
+.ssh-tabs .ssh-tab { display: inline-flex; align-items: center; max-width: 220px; }
+.ssh-tabs .ssh-tab a {
+  display: inline-flex; align-items: center; gap: 6px; padding-right: 4px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.ssh-tabs .tab-close {
+  background: none; color: var(--muted); border: none; padding: 0 6px; line-height: 1.4; font-size: 1.1rem;
+}
+.ssh-tabs .tab-close:hover:not(:disabled) { background: var(--bg); color: var(--text); }
+.dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.connected { background: var(--success); }
+.dot.closed { background: var(--danger); }
+/* Leaves room for the tab bar above the terminal. */
+.ssh-terminals .terminal { height: calc(100vh - 250px); }
 
 .password-input { position: relative; display: flex; }
 .password-input input { flex: 1; min-width: 0; padding-right: 38px; }

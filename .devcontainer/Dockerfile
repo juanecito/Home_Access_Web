@@ -12,7 +12,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         python3 python3-venv python3-pip \
         nodejs npm \
-        nginx sqlite3 openssl rsync \
+        nginx sqlite3 openssl rsync openssh-client \
         sudo git curl ca-certificates procps less nano bash-completion \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/nginx/sites-enabled/default

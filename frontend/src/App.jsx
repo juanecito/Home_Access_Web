@@ -6,6 +6,8 @@ import ItemsSection from './pages/items/ItemsSection.jsx';
 import Account from './pages/Account.jsx';
 import Admin from './pages/admin/Admin.jsx';
 import Terminal from './pages/Terminal.jsx';
+import SshSection from './pages/ssh/SshSection.jsx';
+import { SshSessionsProvider, SshTerminals } from './pages/ssh/SshSessions.jsx';
 
 function Protected({ children, admin = false, pam = false }) {
   const { user, session } = useAuth();
@@ -21,13 +23,15 @@ export default function App() {
   if (loading) return <p className="center muted">Loading…</p>;
 
   return (
-    <>
+    // Keyed by user: logging out (or in as someone else) closes every SSH session.
+    <SshSessionsProvider key={user?.id ?? 0}>
       <header className="topbar">
         <span className="brand">HomeAcces</span>
         {user && (
           <nav>
             <NavLink to="/items">Items</NavLink>
             {session?.method === 'pam' && <NavLink to="/terminal">Terminal</NavLink>}
+            <NavLink to="/ssh">SSH</NavLink>
             {user.role === 'admin' && <NavLink to="/admin">Admin</NavLink>}
             <NavLink to="/account" className="account-link"><Avatar user={user} size={28} />{user.username}</NavLink>
             <button className="link" onClick={logout}>Log out</button>
@@ -41,11 +45,13 @@ export default function App() {
           <Route path="/items/*" element={<Protected><ItemsSection /></Protected>} />
           <Route path="/account" element={<Protected><Account /></Protected>} />
           <Route path="/terminal" element={<Protected pam><Terminal /></Protected>} />
+          <Route path="/ssh/*" element={<Protected><SshSection /></Protected>} />
           <Route path="/admin/*" element={<Protected admin><Admin /></Protected>} />
           <Route path="/users" element={<Navigate to="/admin/users" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        {user && <SshTerminals />}
       </main>
-    </>
+    </SshSessionsProvider>
   );
 }

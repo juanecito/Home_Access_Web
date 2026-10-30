@@ -13,13 +13,14 @@
 #       --rotate-secret       generate a new secret key (signs everyone out)
 #   -u, --update              only add settings missing from an existing file, change nothing else
 #       --no-pam              disable PAM login and the web terminal
+#       --no-ssh              disable the SSH menu by default (admins can still enable it in the UI)
 #       --registration        let anyone who can reach the site create an account
 #       --no-registration     only admins can create accounts (default)
 #       --pam-group GROUP     system group allowed to use PAM login (default: homeacces-pam)
 #       --pam-admin-group G   system group whose PAM users are web admins ("" = none; default: sudo)
 #       --access-ttl MIN      access token lifetime in minutes (default: 15)
 #       --refresh-ttl DAYS    refresh token lifetime in days (default: 7)
-#       --idle MIN            close terminals after MIN minutes without input (default: 30)
+#       --idle MIN            close terminals (local and SSH) after MIN minutes without input (default: 30)
 #   -h, --help
 set -euo pipefail
 
@@ -45,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --rotate-secret) ROTATE=1 ;;
         -u|--update) UPDATE=1 ;;
         --no-pam) SET[HOMEACCES_PAM_ENABLED]=0 ;;
+        --no-ssh) SET[HOMEACCES_SSH_ENABLED]=0 ;;
         --registration) SET[HOMEACCES_ALLOW_REGISTRATION]=1 ;;
         --no-registration) SET[HOMEACCES_ALLOW_REGISTRATION]=0 ;;
         --pam-group) need_value "$@"; group_name "$1" "$2"; [[ -n "$2" ]] || die "--pam-group cannot be empty"

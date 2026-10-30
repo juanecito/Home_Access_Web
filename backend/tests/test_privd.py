@@ -160,7 +160,7 @@ def test_disconnect_kills_shell(settings, monkeypatch):
 
 
 def test_pending_handshakes_are_capped(settings, monkeypatch):
-    monkeypatch.setattr(server, "MAX_PENDING_HANDSHAKES", 2)
+    monkeypatch.setattr(server.TerminalServer, "max_pending", 2)
 
     async def scenario():
         term = server.TerminalServer(settings)

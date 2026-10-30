@@ -1,11 +1,12 @@
 import getpass
+import os
 
 import click
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from . import admin, auth, db, item_types, items, terminal, users
+from . import admin, auth, db, item_types, items, ssh, terminal, users
 from .activity import record
 from .config import Config
 
@@ -15,6 +16,8 @@ def create_app(overrides=None):
     app.config.from_object(Config)
     if overrides:
         app.config.update(overrides)
+    if not app.config.get("SSH_DIR"):
+        app.config["SSH_DIR"] = os.path.join(os.path.dirname(app.config["DATABASE"]), "ssh")
     if not app.config.get("SECRET_KEY") or len(app.config["SECRET_KEY"]) < 32:
         raise RuntimeError("HOMEACCES_SECRET_KEY must be set to a random string of at least 32 characters")
 
@@ -30,6 +33,7 @@ def create_app(overrides=None):
     app.register_blueprint(item_types.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(terminal.bp)
+    app.register_blueprint(ssh.bp)
     app.register_blueprint(admin.bp)
 
     @app.get("/api/health")

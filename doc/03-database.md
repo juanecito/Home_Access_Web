@@ -11,6 +11,8 @@ HomeAcces stores everything in a single SQLite file:
 
 SQLite fits the target well: no server process, tiny memory footprint, a single file to back up.
 The schema is in `backend/app/schema.sql`; table creation and migrations are in `backend/app/db.py`.
+The SSH host keys users have accepted are not in the database but in one `known_hosts` file per
+user under `HOMEACCES_SSH_DIR` (default `ssh/` next to the database, see §3.2 `ssh_profiles`).
 
 ## 3.1 Entity-relationship diagram
 
@@ -18,6 +20,7 @@ The schema is in `backend/app/schema.sql`; table creation and migrations are in 
 erDiagram
     users ||--o{ items : "owns (CASCADE)"
     users ||--o{ refresh_tokens : "has (CASCADE)"
+    users ||--o{ ssh_profiles : "owns (CASCADE)"
     users |o--o{ activity_log : "acts (SET NULL)"
     item_types ||--o{ item_type_fields : "defines (CASCADE)"
     item_types |o--o{ items : "types"
@@ -74,6 +77,17 @@ erDiagram
         INTEGER item_id PK,FK
         ANY field_1 "one column per field"
         ANY field_n
+    }
+    ssh_profiles {
+        INTEGER id PK
+        INTEGER owner_id FK
+        TEXT name "UNIQUE per owner"
+        TEXT host "lower-case name or IP"
+        INTEGER port "default 22"
+        TEXT username "remote user"
+        TEXT private_key "OpenSSH/PEM or NULL"
+        TEXT created_at
+        TEXT updated_at
     }
     settings {
         TEXT key PK
@@ -143,9 +157,24 @@ The catalogue of user-defined types. `item_type_fields.name` is both the field n
 the column name in the type's table. `default_value` is stored as JSON (`0`, `1.5`, `true`, `"text"`).
 `position` keeps the field order chosen in the UI. `UNIQUE (type_id, name)`.
 
+### `ssh_profiles`
+
+Each user's saved SSH connections (SSH menu), read by the API and by `homeacces-ssh` when a session
+opens. `owner_id → users.id ON DELETE CASCADE`; `UNIQUE (owner_id, name)`. Rows are private to their
+owner: every query filters on `owner_id`, for admins too.
+
+| Column | Notes |
+|---|---|
+| `host`, `port`, `username` | Validated by `app/ssh.py` so they are safe on the `ssh` command line (see [Backend §2.5](02-backend.md#25-api-reference)) |
+| `private_key` | Optional OpenSSH/PEM private key (≤ 16 KB), **stored as is, not encrypted**, never sent back to the browser (the API returns `has_key`). `NULL` = password or keyboard-interactive login. Passwords are never stored |
+
+Host keys accepted in the terminal live in `HOMEACCES_SSH_DIR/known_hosts/<user id>` (written by
+`ssh`, owned by `homeacces`, directory mode 0700). Deleting a user deletes their profiles (cascade)
+and their `known_hosts` file.
+
 ### `settings`
 
-Key/value store for admin-changed runtime settings. Currently only `allow_registration` (`'0'`/`'1'`).
+Key/value store for admin-changed runtime settings: `allow_registration` and `ssh_enabled` (`'0'`/`'1'`).
 
 ### `activity_log`
 
@@ -207,7 +236,8 @@ flowchart TB
 ```
 
 Each request opens one connection (`db.get_db()`), stored in `flask.g`, and closes it at
-teardown. Every connection sets:
+teardown. `homeacces-ssh` also opens a short connection each time an SSH session starts, to read
+the profile (read-only). Every connection sets:
 
 | Setting | Why |
 |---|---|
@@ -258,6 +288,8 @@ sudo -u homeacces sqlite3 /var/lib/homeacces/homeacces.sqlite3
 # Useful queries
 SELECT id, username, role, auth_source, created_at FROM users;
 SELECT event, COUNT(*) FROM activity_log GROUP BY event;
+SELECT p.id, u.username, p.name, p.username || '@' || p.host || ':' || p.port, p.private_key IS NOT NULL AS has_key
+  FROM ssh_profiles p JOIN users u ON u.id = p.owner_id;
 SELECT ts, username, ip FROM activity_log WHERE event='auth.login' AND success=0 ORDER BY id DESC LIMIT 20;
 .tables            -- also shows item_type_<id> tables
 
@@ -265,11 +297,14 @@ SELECT ts, username, ip FROM activity_log WHERE event='auth.login' AND success=0
 sudo sqlite3 /var/lib/homeacces/homeacces.sqlite3 ".backup /root/homeacces-$(date +%F).sqlite3"
 
 # Restore
-sudo systemctl stop homeacces
+sudo systemctl stop homeacces homeacces-ssh
 sudo install -o homeacces -g homeacces -m 0640 /root/homeacces-2026-10-29.sqlite3 /var/lib/homeacces/homeacces.sqlite3
 sudo rm -f /var/lib/homeacces/homeacces.sqlite3-wal /var/lib/homeacces/homeacces.sqlite3-shm
-sudo systemctl start homeacces
+sudo systemctl start homeacces homeacces-ssh
 ```
+
+The database backup contains the saved SSH private keys: keep it private. To keep the users'
+accepted host keys as well, back up `/var/lib/homeacces/ssh/` too.
 
 Do not copy the `.sqlite3` file with `cp` while the service runs — use `.backup`, which takes a
 consistent snapshot including uncommitted WAL pages.

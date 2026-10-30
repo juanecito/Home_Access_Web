@@ -15,6 +15,7 @@ ADMIN = ("admin",)
 @require_auth(ADMIN)
 def get_settings():
     return jsonify(allow_registration=settings.allow_registration(),
+                   ssh_enabled=settings.ssh_enabled(),
                    activity_log_file=current_app.config["ACTIVITY_LOG"] or None,
                    activity_retention_days=current_app.config["ACTIVITY_RETENTION_DAYS"])
 
@@ -23,13 +24,14 @@ def get_settings():
 @require_auth(ADMIN)
 def update_settings():
     data = json_body()
-    if "allow_registration" in data:
-        value = data["allow_registration"]
-        if not isinstance(value, bool):
-            abort(400, "allow_registration must be a boolean")
-        if value != settings.allow_registration():
-            settings.set_bool("allow_registration", value)
-            record("settings.update", allow_registration=value)
+    for key in ("allow_registration", "ssh_enabled"):
+        if key in data:
+            value = data[key]
+            if not isinstance(value, bool):
+                abort(400, f"{key} must be a boolean")
+            if value != settings.get_bool(key):
+                settings.set_bool(key, value)
+                record("settings.update", **{key: value})
     return get_settings()
 
 

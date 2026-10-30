@@ -7,6 +7,7 @@ export default defineConfig({
     // During development, forward API calls to the Flask dev server.
     proxy: {
       '/api/terminal/ws': { target: 'ws://127.0.0.1:8001', ws: true },
+      '/api/ssh/ws': { target: 'ws://127.0.0.1:8002', ws: true },
       '/api': 'http://127.0.0.1:8000',
     },
   },

@@ -10,7 +10,7 @@ In production, the build output (`frontend/dist/`) is plain static files served 
 |---|---|
 | `react`, `react-dom` 18.3.1 | UI rendering |
 | `react-router-dom` 6.30.6 | Client-side routing (`BrowserRouter`) |
-| `@xterm/xterm` 5.5.0, `@xterm/addon-fit` 0.10.0 | Web terminal emulator |
+| `@xterm/xterm` 5.5.0, `@xterm/addon-fit` 0.10.0 | Terminal emulator (web terminal and SSH) |
 | `vite` 8.3.5, `@vitejs/plugin-react` 6.1.2 | Dev server with hot reload, production bundler (needs Node.js ≥ 20.19; Debian 13 ships 20.19.2) |
 
 No UI framework and no state library: one global stylesheet (`src/styles.css`) and one React
@@ -21,21 +21,27 @@ context for authentication.
 ```
 frontend/
 ├── index.html               <div id="root"> + <script type="module" src="/src/main.jsx">
-├── vite.config.js           dev proxy /api → :8000, /api/terminal/ws → :8001; build writes dist/licenses.md
+├── vite.config.js           dev proxy /api → :8000, /api/terminal/ws → :8001, /api/ssh/ws → :8002;
+│                            build writes dist/licenses.md
 ├── package.json
 └── src/
     ├── main.jsx             mounts <StrictMode><BrowserRouter><AuthProvider><App/>
-    ├── App.jsx              top bar + routes + <Protected> guard
+    ├── App.jsx              top bar + routes + <Protected> guard, SSH sessions provider
     ├── AuthContext.jsx      user / session / methods state, login/register/logout
     ├── api.js               fetch wrapper: cookies, CSRF header, auto-refresh, ApiError
     ├── styles.css           all styles
     ├── Avatar.jsx           <img> with default silhouette
     ├── AvatarSettings.jsx   upload → crop/resize to 60×60 in a <canvas>
     ├── PasswordInput.jsx    password field with show/hide button
+    ├── TerminalView.jsx     reusable xterm.js ↔ WebSocket terminal (local and SSH)
     └── pages/
         ├── Login.jsx        sign in (local / system account) and register
         ├── Account.jsx      password change + avatar
-        ├── Terminal.jsx     xterm.js ↔ WebSocket
+        ├── Terminal.jsx     local shell: TerminalView on /api/terminal/ws
+        ├── ssh/
+        │   ├── SshSection.jsx     tab bar (Connections + one tab per session), routes, destination()
+        │   ├── SshConnections.jsx saved connections: list, add, edit, delete, forget host key, connect
+        │   └── SshSessions.jsx    open sessions context; SshTerminals: one TerminalView per session
         ├── items/
         │   ├── ItemsSection.jsx   tabs: Items | Item types
         │   ├── Items.jsx          list, search, filter, pagination, create/edit
@@ -44,7 +50,7 @@ frontend/
         └── admin/
             ├── Admin.jsx          tabs: Users | Settings | Activity log
             ├── Users.jsx          user table, create, edit dialog, delete
-            ├── Settings.jsx       registration on/off
+            ├── Settings.jsx       registration on/off, SSH terminal on/off
             └── Activity.jsx       filtered, paginated activity log
 ```
 
@@ -54,7 +60,9 @@ frontend/
 flowchart TB
     M["main.jsx"] --> SM["StrictMode"] --> BR["BrowserRouter"] --> AP["AuthProvider<br/>(AuthContext)"] --> APP["App"]
     APP --> TOP["header.topbar<br/>NavLinks + Avatar + Log out"]
+    APP --> SP["SshSessionsProvider<br/>(open SSH sessions)"]
     APP --> RT["Routes"]
+    APP --> ST["SshTerminals<br/>(always mounted when signed in)"] --> TV
     RT --> LG["/login → Login"]
     RT --> IS["/items/* → Protected → ItemsSection"]
     IS --> IT["index → Items"]
@@ -64,7 +72,12 @@ flowchart TB
     RT --> AC["/account → Protected → Account"]
     AC --> PI["PasswordInput"]
     AC --> AV["AvatarSettings → Avatar"]
-    RT --> TE["/terminal → Protected pam → Terminal<br/>(xterm.js)"]
+    RT --> TE["/terminal → Protected pam → Terminal"]
+    TE --> TV["TerminalView<br/>(xterm.js)"]
+    RT --> SS["/ssh/* → Protected → SshSection"]
+    SS --> TB["nav.tabs: Connections | one tab per session"]
+    SS --> SC["index → SshConnections"] --> PF["ProfileForm"]
+    SS --> SSE["t/:sid → SessionTab<br/>(redirects unknown sessions)"]
     RT --> AD["/admin/* → Protected admin → Admin"]
     AD --> US["users → Users → EditUser (dialog)"]
     AD --> SE["settings → Settings"]
@@ -81,6 +94,8 @@ flowchart TB
 | `/items/types` | `ItemTypes` | signed in | (tab) |
 | `/account` | `Account` | signed in | always (avatar + name) |
 | `/terminal` | `Terminal` | signed in **with PAM** | `session.method === 'pam'` |
+| `/ssh` | `SshConnections` | signed in | always |
+| `/ssh/t/:sid` | session tab (terminal drawn by `SshTerminals`) | signed in | (Connect button, tab bar) |
 | `/admin/users`, `/admin/settings`, `/admin/activity` | `Users`, `Settings`, `Activity` | `role === 'admin'` | admin |
 | `/users` | → `/admin/users` | | legacy link |
 | `*` | → `/` | | |
@@ -202,29 +217,59 @@ the API answers 429 for 15 minutes). PAM accounts: an explanation
 that the password is changed with `passwd`. Both: `AvatarSettings` — the image is cropped to a
 centred square and scaled to 60×60 **in the browser** (`<canvas>`), then sent as a data URL.
 
+### SSH (`pages/ssh/*`)
+
+`SshConnections` loads `GET /api/ssh/profiles` and lists the user's connections as
+`user@host[:port]`, with a *key* badge when a private key is saved. Each has **Connect**
+(opens a new session tab, disabled when `enabled` is false), **Edit**, **Forget host key**
+(`DELETE …/host-key`, after a confirmation) and **Delete**. `ProfileForm` (add and edit) has name,
+host, port, remote user and an optional private key, pasted or loaded with **Load key file…**
+(read in the browser, ≤ 16 KB). The saved key is never shown: an empty field keeps it, and
+*Remove the saved key* sends `private_key: null`. Passwords are not part of the form.
+
+Several sessions can be open at once, to different connections or several to the same one.
+`SshSessionsProvider` (in `App`, keyed by the user so logging out closes them all) holds the list
+`{id, profile, label, status}`; **Connect** adds one and navigates to `/ssh/t/<id>`. `SshSection`
+shows a tab bar: **Connections**, then one tab per session with a status dot (connecting /
+connected / closed) and a **×** button (or middle click) that closes it, after a confirmation
+while it is connected. A second session to the same connection is labelled *Name (2)*, and so on.
+
+`SshTerminals` is rendered by `App` below the routes and renders one `TerminalView` per session
+(`wsPath="/api/ssh/ws"`, ticket from `POST /api/ssh/ticket {profile_id}`); only the one of the
+current `/ssh/t/<id>` is shown. The others stay mounted and connected, also while the user is on
+another page. Session ids live only in the browser: after a reload `/ssh/t/<id>` redirects to
+`/ssh`, and the page asks before unloading while a session is connected. homeacces-ssh refuses
+sessions beyond `HOMEACCES_SSH_MAX_PER_USER` (default 4); the refusal is shown in that tab's terminal.
+
 ### Admin (`pages/admin/*`)
 
 | Tab | Calls | Features |
 |---|---|---|
 | Users | `GET/POST /api/users`, `PUT/DELETE /api/users/<id>` | Table with avatar, role, source, last login; create form; `<dialog>` editor (local accounts only); delete with confirmation |
-| Settings | `GET/PUT /api/admin/settings` | Toggle self-registration; shows log file and retention |
+| Settings | `GET/PUT /api/admin/settings` | Toggle self-registration and the SSH terminal; shows log file and retention |
 | Activity log | `GET /api/admin/activity` | Filters user / event (exact or `prefix.`) / result; 50 per page, Newer / Older |
 
-## 5.7 Web terminal (`pages/Terminal.jsx`)
+## 5.7 Web terminals (`TerminalView.jsx`)
+
+Both terminals use the same component. `Terminal.jsx` (local shell) and `SshTerminals` only pass
+props: `title`, `wsPath` (`/api/terminal/ws` or `/api/ssh/ws`), `getTicket` (an async function that
+POSTs to `/api/terminal/ticket` or `/api/ssh/ticket`), optional `actions`, and for SSH tabs `active`
+(an inactive view is hidden but stays connected; it is refitted, repainted and focused when shown
+again) and `onStatus` (reports `connecting` / `connected` / `closed` to the tab bar). The protocol is the same for both services (see `backend/webterm.py`).
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant C as Terminal component
+    participant C as TerminalView
     participant X as xterm.js
     participant API as api.js
     participant W as WebSocket
 
     C->>X: new Terminal() + FitAddon, open(host div)
     C->>X: fit (min 120 cols, scroll horizontally if narrower)
-    C->>API: POST /api/terminal/ticket
+    C->>API: getTicket() → POST /api/terminal/ticket or /api/ssh/ticket
     API-->>C: {ticket}
-    C->>W: new WebSocket(wss://host/api/terminal/ws), binaryType=arraybuffer
+    C->>W: new WebSocket(wss://host + wsPath), binaryType=arraybuffer
     W-->>C: onopen
     C->>W: {"type":"auth", ticket, cols, rows}
     C->>C: status = connected, focus
@@ -240,8 +285,8 @@ sequenceDiagram
 ```
 
 The `useEffect` depends on a `session` counter: clicking **Reconnect** increments it, which
-disposes the old terminal and socket and builds new ones. Cleanup on unmount closes the socket
-(the helper then hangs up the shell).
+disposes the old terminal and socket and builds new ones (with a new ticket). Cleanup on unmount
+closes the socket (the service then hangs up the shell or `ssh`).
 
 ## 5.8 Development vs production
 
@@ -251,6 +296,7 @@ flowchart LR
         B1["Browser :5173"] --> V["Vite dev server<br/>HMR, JSX on the fly"]
         V -- "/api" --> F1["Flask --debug :8000"]
         V -- "/api/terminal/ws (ws)" --> P1["privd :8001"]
+        V -- "/api/ssh/ws (ws)" --> S1["homeacces-ssh :8002"]
     end
     subgraph Prod["Production (npm run build)"]
         SRC["src/*.jsx"] --> VB["vite build"] --> DIST["dist/index.html<br/>dist/assets/index-[hash].js|css<br/>dist/licenses.md"]

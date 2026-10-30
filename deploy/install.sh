@@ -18,7 +18,7 @@ SSL_DIR=/etc/ssl/homeacces
 
 echo "==> Installing system packages"
 apt-get update
-apt-get install -y nginx python3 python3-venv sqlite3 openssl rsync
+apt-get install -y nginx python3 python3-venv sqlite3 openssl rsync openssh-client
 if [[ "${SKIP_FRONTEND_BUILD:-0}" != "1" ]]; then
     apt-get install -y nodejs npm
 fi
@@ -103,11 +103,12 @@ echo "==> Configuring systemd services"
 install -m 0644 "$SRC/deploy/systemd/homeacces.socket" /etc/systemd/system/homeacces.socket
 install -m 0644 "$SRC/deploy/systemd/homeacces.service" /etc/systemd/system/homeacces.service
 install -m 0644 "$SRC/deploy/systemd/homeacces-privd.service" /etc/systemd/system/homeacces-privd.service
+install -m 0644 "$SRC/deploy/systemd/homeacces-ssh.service" /etc/systemd/system/homeacces-ssh.service
 systemctl daemon-reload
-systemctl enable homeacces.socket homeacces-privd homeacces
+systemctl enable homeacces.socket homeacces-privd homeacces-ssh homeacces
 # The API gets its socket from homeacces.socket: stop it first so the socket can be (re)created.
 systemctl stop homeacces
-systemctl restart homeacces.socket homeacces-privd
+systemctl restart homeacces.socket homeacces-privd homeacces-ssh
 systemctl start homeacces
 
 echo

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Run HomeAcces inside the dev container (there is no systemd in Docker).
 #
-#   homeacces.sh start [dev]   Flask --debug :8000 + homeacces-privd :8001 + Vite :5173 (hot reload)
-#   homeacces.sh start prod    gunicorn (Unix socket) + homeacces-privd :8001 + nginx HTTPS :8443, using the
-#                          real deploy/nginx config and a production build of the UI
-#   homeacces.sh stop | restart [mode] | status | logs [api|privd|ui|nginx]
+#   homeacces.sh start [dev]   Flask --debug :8000 + homeacces-privd :8001 + homeacces-ssh :8002 + Vite :5173
+#                          (hot reload)
+#   homeacces.sh start prod    gunicorn (Unix socket) + homeacces-privd :8001 + homeacces-ssh :8002 + nginx HTTPS
+#                          :8443, using the real deploy/nginx config and a production build of the UI
+#   homeacces.sh stop | restart [mode] | status | logs [api|privd|ssh|ui|nginx]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="$ROOT/backend/.venv"
 ENV_FILE="$ROOT/backend/instance/dev.env"
 RUN=/tmp/homeacces
-SERVICES=(api privd ui nginx)
+SERVICES=(api privd ssh ui nginx)
 mkdir -p "$RUN"
 
 [[ -f "$ENV_FILE" ]] || { echo "Missing $ENV_FILE: run .devcontainer/post-create.sh first" >&2; exit 1; }
@@ -33,10 +34,16 @@ start_privd() {
     spawn privd sudo bash -c "set -a; . '$ENV_FILE'; set +a; export HOMEACCES_PRIVD_CLIENT_USER=\${HOMEACCES_PRIVD_CLIENT_USER:-$(id -un)}; cd '$ROOT/backend'; exec '$VENV/bin/python' -B -m homeacces_privd"
 }
 
+start_ssh() {
+    # Unprivileged, like on the Pi (there it runs as the homeacces user).
+    spawn ssh bash -c "cd '$ROOT/backend' && exec '$VENV/bin/python' -m homeacces_ssh"
+}
+
 start_dev() {
     export HOMEACCES_COOKIE_SECURE=0  # Vite serves plain HTTP
     set -a; . "$ENV_FILE"; set +a
     start_privd
+    start_ssh
     spawn api bash -c "cd '$ROOT/backend' && exec '$VENV/bin/flask' --app wsgi.py run --host 127.0.0.1 --port 8000 --debug"
     spawn ui bash -c "cd '$ROOT/frontend' && exec npm run dev -- --host 0.0.0.0 --port 5173 --strictPort"
     echo "HomeAcces (dev) → http://localhost:5173"
@@ -68,6 +75,7 @@ start_prod() {
     export HOMEACCES_COOKIE_SECURE=1
     set -a; . "$ENV_FILE"; set +a
     start_privd
+    start_ssh
     spawn api bash -c "cd '$ROOT/backend' && exec '$VENV/bin/gunicorn' --workers 2 --bind 'unix:$RUN/api.sock' --access-logfile - wsgi:app"
     spawn nginx sudo nginx -g 'daemon off;'
     echo "HomeAcces (prod) → https://localhost:8443 (self-signed certificate)"

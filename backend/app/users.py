@@ -1,6 +1,7 @@
 """User administration API (admin only)."""
 from flask import Blueprint, abort, g, jsonify
 
+from . import ssh
 from .activity import record
 from .auth import (hash_password, json_body, public_user, require_auth, revoke_all_refresh_tokens,
                    validate_new_local_username, validate_password)
@@ -117,5 +118,6 @@ def delete_user(user_id):
     db = get_db()
     db.execute("DELETE FROM users WHERE id = ?", (user_id,))
     db.commit()
+    ssh.remove_known_hosts(user_id)
     record("user.delete", target=user["username"], target_id=user_id)
     return "", 204

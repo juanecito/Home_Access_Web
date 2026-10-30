@@ -1,16 +1,19 @@
-# 2. Backend (Flask API and privileged helper)
+# 2. Backend (Flask API, privileged helper and SSH service)
 
 [← Architecture](01-architecture.md) · [Index](README.md) · Next: [Database →](03-database.md)
 
-The backend lives in `backend/` and consists of two Python packages:
+The backend lives in `backend/` and consists of three Python packages, plus the module
+`webterm.py` (the WebSocket ↔ PTY bridge shared by both terminal services):
 
 | Package | Process | Runs as | Purpose |
 |---|---|---|---|
 | `app/` | gunicorn → `wsgi:app` | `homeacces` | The REST API (JSON over HTTP) |
 | `homeacces_privd/` | `python -m homeacces_privd` | `root` | PAM checks over a Unix socket + web terminal WebSocket |
+| `homeacces_ssh/` | `python -m homeacces_ssh` | `homeacces` | SSH terminal WebSocket (OpenSSH client) for the SSH menu |
 
 Dependencies (`backend/requirements.txt`): `Flask`, `PyJWT`, `gunicorn`, `websockets`. Nothing else —
-password hashing comes from Werkzeug (bundled with Flask), PAM is called through `ctypes`.
+password hashing comes from Werkzeug (bundled with Flask), PAM is called through `ctypes`. The SSH
+service runs the system's OpenSSH client (`ssh`, Debian package `openssh-client`).
 
 ## 2.1 Module map
 
@@ -25,17 +28,21 @@ flowchart TB
     I --> USERS["users.py<br/>/api/users"]
     I --> ADMIN["admin.py<br/>/api/admin/*"]
     I --> TERM["terminal.py<br/>/api/terminal/ticket"]
+    I --> SSHB["ssh.py<br/>/api/ssh/*"]
 
     AUTH --> PRIVC["privd.py<br/>Unix socket client"]
     AUTH --> SET["settings.py<br/>runtime settings"]
-    ADMIN --> SET
+    ADMIN & SSHB --> SET
     ITEMS --> TYPES
-    AUTH & ITEMS & TYPES & USERS & ADMIN & TERM --> ACT["activity.py<br/>record()"]
-    AUTH & ITEMS & TYPES & USERS & ADMIN & SET & ACT --> DBM
+    USERS -- "remove_known_hosts()" --> SSHB
+    AUTH & ITEMS & TYPES & USERS & ADMIN & TERM & SSHB --> ACT["activity.py<br/>record()"]
+    AUTH & ITEMS & TYPES & USERS & ADMIN & SSHB & SET & ACT --> DBM
     DBM --> SQL[("schema.sql")]
 
     PRIVC -. "privd.sock" .-> SRV["homeacces_privd/server.py"]
     SRV --> PAMPY["homeacces_privd/pam.py<br/>ctypes → libpam"]
+    SRV & SSHSRV["homeacces_ssh/server.py"] --> WT["webterm.py<br/>WebSocket ↔ PTY bridge"]
+    SSHSRV -. "reads ssh_profiles" .-> SQL
 ```
 
 | File | Responsibility |
@@ -52,9 +59,12 @@ flowchart TB
 | `app/activity.py` | Audit trail: DB table + append-only text file, retention pruning |
 | `app/settings.py` | Key/value runtime settings with environment defaults |
 | `app/terminal.py` | Issues 30-second single-use terminal tickets |
+| `app/ssh.py` | SSH menu: each user's saved connections (CRUD, forget host key) and 30-second single-use SSH tickets |
 | `app/privd.py` | Sends one JSON line to the helper's Unix socket, returns the reply |
-| `homeacces_privd/server.py` | asyncio server: Unix socket protocol + WebSocket terminal |
+| `homeacces_privd/server.py` | asyncio server: Unix socket protocol + WebSocket terminal (login shells) |
 | `homeacces_privd/pam.py` | Minimal Linux-PAM binding (`pam_authenticate`, `pam_acct_mgmt`) |
+| `homeacces_ssh/server.py` | asyncio server: WebSocket terminal running the OpenSSH client for one saved connection |
+| `webterm.py` | `TerminalServer` base class shared by both terminal services: ticket check, `Origin` check, limits, PTY session |
 
 ## 2.2 Application factory and startup
 
@@ -70,7 +80,7 @@ flowchart TD
     C -- yes --> D["Wrap wsgi_app in ProxyFix<br/>x_for=1, x_proto=1"]
     D --> E["teardown_appcontext(close_db)"]
     E --> F["init_db(): run schema.sql<br/>+ _migrate() old databases"]
-    F --> G["register blueprints:<br/>auth, items, item_types,<br/>users, terminal, admin"]
+    F --> G["register blueprints:<br/>auth, items, item_types,<br/>users, terminal, ssh, admin"]
     G --> H["/api/health, error handler,<br/>after_request no-store"]
     H --> I["register CLI commands"]
     I --> R([ready to serve])
@@ -130,7 +140,8 @@ Conventions used by every view:
   are validated by regex and quoted (see §2.6).
 - **Audit**: state-changing views call `activity.record(event, **details)`.
 - **Ownership**: items not owned by a non-admin user return **404** (not 403), so ids of other
-  users' items are not disclosed.
+  users' items are not disclosed. SSH connections are strictly personal: another user's connection
+  is a 404 for everyone, admins included.
 
 ## 2.4 Configuration (`app/config.py`)
 
@@ -139,7 +150,7 @@ loaded by systemd's `EnvironmentFile=`).
 
 | Variable | Default | Used for |
 |---|---|---|
-| `HOMEACCES_SECRET_KEY` | — (**required**, ≥ 32 chars) | Signs all JWTs (access, refresh, terminal tickets) |
+| `HOMEACCES_SECRET_KEY` | — (**required**, ≥ 32 chars) | Signs all JWTs (access, refresh, terminal and SSH tickets) |
 | `HOMEACCES_DATABASE` | `backend/instance/homeacces.sqlite3` | SQLite file path |
 | `HOMEACCES_ACCESS_TTL_MIN` | `15` | Access token lifetime (minutes) |
 | `HOMEACCES_REFRESH_TTL_DAYS` | `7` | Refresh token lifetime (days) |
@@ -152,11 +163,17 @@ loaded by systemd's `EnvironmentFile=`).
 | `HOMEACCES_PAM_ENABLED` | `0` (app) / `1` (env template) | Allow system-account login + terminal |
 | `HOMEACCES_PAM_ADMIN_GROUP` | `sudo` | PAM users in this group get the web `admin` role |
 | `HOMEACCES_PRIVD_SOCKET` | `/run/homeacces/privd.sock` | Helper Unix socket path |
+| `HOMEACCES_SSH_ENABLED` | `1` | Initial value for the SSH menu (admins can override in UI) |
+| `HOMEACCES_SSH_DIR` | `ssh` next to the database | Holds `known_hosts/<user id>`, one file per user (shared with homeacces-ssh) |
 
 Helper-only variables (read by `homeacces_privd/server.py`): `HOMEACCES_PAM_GROUP` (`homeacces-pam`),
 `HOMEACCES_PAM_MIN_UID` (`1000`), `HOMEACCES_PRIVD_CLIENT_USER` (`homeacces`),
 `HOMEACCES_TERMINAL_LISTEN` (`127.0.0.1:8001`), `HOMEACCES_TERMINAL_IDLE_MIN` (`30`),
 `HOMEACCES_TERMINAL_MAX_PER_USER` (`4`), `HOMEACCES_TERMINAL_MAX_TOTAL` (`16`).
+
+SSH-service-only variables (read by `homeacces_ssh/server.py`, which also reads `HOMEACCES_SECRET_KEY`,
+`HOMEACCES_DATABASE`, `HOMEACCES_SSH_DIR` and `HOMEACCES_TERMINAL_IDLE_MIN`):
+`HOMEACCES_SSH_LISTEN` (`127.0.0.1:8002`), `HOMEACCES_SSH_MAX_PER_USER` (`4`), `HOMEACCES_SSH_MAX_TOTAL` (`16`).
 
 Fixed values: `JWT_ALGORITHM = "HS256"`, `TERMINAL_TICKET_TTL = 30 s`, `MAX_CONTENT_LENGTH = 64 KiB`,
 `REFRESH_REUSE_GRACE_SECONDS = 10`.
@@ -217,8 +234,8 @@ Item object: `id, owner_id, owner, title, description, done, type_id, type_name,
 
 | Method | Path | Body / query |
 |---|---|---|
-| GET | `/settings` | → `{allow_registration, activity_log_file, activity_retention_days}` |
-| PUT | `/settings` | `{allow_registration: bool}` |
+| GET | `/settings` | → `{allow_registration, ssh_enabled, activity_log_file, activity_retention_days}` |
+| PUT | `/settings` | `{allow_registration?: bool, ssh_enabled?: bool}` |
 | GET | `/activity` | `?user=&event=auth.login\|auth.&result=success\|failure&limit=50 (1–500)&offset=` → `{entries, total, limit, offset, events}` |
 
 ### Terminal — `terminal.py` (🖥️) and helper
@@ -227,6 +244,28 @@ Item object: `id, owner_id, owner, title, description, done, type_id, type_name,
 |---|---|---|
 | POST | `/api/terminal/ticket` | → `{ticket, expires_in: 30}`; 404 if PAM disabled, 403 if not a PAM session |
 | WS | `/api/terminal/ws` | Served by **homeacces-privd**, not Flask (see §2.9) |
+
+### SSH — `ssh.py`, prefix `/api/ssh` (🔑; every user, own connections only)
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/profiles` | → `{profiles: [{id, name, host, port, username, has_key, created_at, updated_at}], enabled}` |
+| POST | `/profiles` | `{name, host, port?, username, private_key?}` → 201 `{profile}`; 409 duplicate name; max 100 per user |
+| PUT | `/profiles/<id>` | same body → `{profile}`; `private_key` absent = keep, `null`/`""` = remove |
+| DELETE | `/profiles/<id>` | → 204 |
+| DELETE | `/profiles/<id>/host-key` | → `{removed: n}`: deletes the server's lines (`host` or `[host]:port`) from the user's `known_hosts` |
+| POST | `/ticket` | `{profile_id}` → `{ticket, expires_in: 30}`; 403 if an admin disabled SSH, 404 if not your connection |
+| WS | `/ws` | Served by **homeacces-ssh**, not Flask (see §2.10) |
+
+Validation (`_validate`) keeps every value safe to put on the `ssh` command line:
+
+| Field | Rule |
+|---|---|
+| `name` | 1–64 characters, unique per user |
+| `host` | IP address (IPv4/IPv6, brackets allowed, no `%zone`) or host name `[A-Za-z0-9_-]` labels, ≤ 253 chars; stored lower-case |
+| `port` | integer 1–65535 (default 22) |
+| `username` | `^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}$` — no leading `-`, no `%` or `$` (OpenSSH expansion) |
+| `private_key` | ≤ 16 KB, `-----BEGIN … PRIVATE KEY-----` … `-----END … PRIVATE KEY-----` (OpenSSH or PEM); never returned, only `has_key` |
 
 ### Health
 
@@ -319,13 +358,15 @@ logrotate needs no signal.
 | `user.` | `create`, `update`, `delete` |
 | `item.` | `create`, `update`, `delete` |
 | `item_type.` | `create`, `update`, `delete` |
+| `ssh.` | `profile_create`, `profile_update`, `profile_delete`, `host_key_forget`, `open` (with host, port, remote user; never the key) |
 | other | `settings.update`, `terminal.open` |
 
 ## 2.8 Runtime settings (`settings.py`)
 
 The `settings` table stores admin-changed values. A missing key falls back to the environment
-default (`DEFAULTS = {"allow_registration": "ALLOW_REGISTRATION"}`). So the env file sets the
-initial behaviour and the Admin → Settings page overrides it permanently.
+default (`DEFAULTS = {"allow_registration": "ALLOW_REGISTRATION", "ssh_enabled": "SSH_ENABLED"}`).
+So the env file sets the initial behaviour and the Admin → Settings page overrides it permanently.
+Switching `ssh_enabled` off stops new SSH tickets; sessions already open are not closed.
 
 ## 2.9 The privileged helper (`homeacces_privd`)
 
@@ -346,7 +387,7 @@ flowchart TB
     PA & PAC --> POL["account_info(): uid ≥ 1000,<br/>member of homeacces-pam"]
     POL --> OK["{ok:true, username, groups}"]
 
-    W --> TS["TerminalServer.handle()"]
+    W --> TS["TerminalServer.handle()<br/>(webterm.py)"]
     TS --> PEND{"≤ 32 pending<br/>handshakes?"}
     PEND -- no --> BUSY["close 1013 server busy"]
     PEND -- yes --> CHK["path, Origin == Host,<br/>auth msg, verify ticket,<br/>policy + PAM account, limits"]
@@ -371,6 +412,12 @@ accounts exist. If the helper is unreachable, `app/privd.py` returns **503**
 
 ### Terminal session internals
 
+The WebSocket side lives in `webterm.py`. Its `TerminalServer` does the handshake (≤ 32 pending
+handshakes, path, `Origin`, single-use ticket, per-key and total limits) and runs the session;
+subclasses only say which ticket `type` they accept, what the limits count (`session_key()`) and
+which command to start (`prepare()`). The helper's subclass accepts `type: "terminal"` tickets,
+counts sessions per system user and starts the login shell.
+
 ```mermaid
 flowchart LR
     WS["WebSocket"] -- "{type:input,data}" --> PI["pump_input()<br/>write to PTY master"]
@@ -382,20 +429,58 @@ flowchart LR
     PI & PO & IW --> FIN["first task done →<br/>close PTY (SIGHUP shell),<br/>wait 5 s / kill, ws.close(reason)"]
 ```
 
-## 2.10 Tests
+## 2.10 The SSH terminal service (`homeacces_ssh`)
 
-`backend/tests/` (pytest, 35 tests) covers: health, register/login/logout, validation, CSRF,
+A second `webterm.TerminalServer` subclass, run as the unprivileged `homeacces` user (WebSocket
+`127.0.0.1:8002`, path `/api/ssh/ws`). It accepts `type: "ssh"` tickets (claims `sub` + `profile_id`)
+and counts sessions per web user (4 per user, 16 in total by default).
+
+```mermaid
+flowchart TB
+    M["main()"] --> MK["mkdir SSH_DIR/known_hosts (0700)<br/>private temp dir for keys"]
+    MK --> W["websockets.serve<br/>127.0.0.1:8002, max 256 KiB msgs, ping 30 s"]
+    W --> TS["SshServer.handle()<br/>(webterm.py handshake + limits)"]
+    TS --> PR["prepare(): SELECT profile<br/>WHERE id = profile_id AND owner_id = sub"]
+    PR -- "not found" --> DEN["close 1008<br/>SSH connection not found"]
+    PR --> KEY{"private_key?"}
+    KEY -- yes --> TMP["write key to 0600 temp file<br/>(deleted when the session ends)"]
+    KEY -- no --> RUN
+    TMP --> RUN["openpty() → setsid --ctty<br/>ssh -F /dev/null -e none -o … -p PORT -l USER -- HOST"]
+```
+
+`ssh` gets the PTY as its controlling terminal, so it asks for passwords, key passphrases and
+unknown host keys inside the browser terminal. `ssh_command()` builds a fixed, locked-down command line:
+
+| Option | Why |
+|---|---|
+| `-F /dev/null` | Ignore any `ssh_config` |
+| `-e none` | No escape character, so no `~C` command line |
+| `UserKnownHostsFile=SSH_DIR/known_hosts/<user id>`, `GlobalKnownHostsFile=none` | One host-key list per web user |
+| `StrictHostKeyChecking=ask` | New keys are confirmed in the terminal; changed keys are refused |
+| `IdentitiesOnly=yes`, `IdentityAgent=none`, `IdentityFile=<temp file>\|none` | Only the connection's own key, never an agent |
+| `ClearAllForwardings=yes`, `ForwardAgent=no`, `ForwardX11=no` | No port, agent or X11 forwarding |
+| `PermitLocalCommand=no`, `ControlMaster=no`, `ControlPath=none` | No local commands, no shared connections |
+| `ConnectTimeout=15`, `ServerAliveInterval=30` | Fail fast, detect dead servers |
+
+The destination comes after `--`, and host and user were validated by the API (§2.5), so they can
+never be read as options.
+
+## 2.11 Tests
+
+`backend/tests/` (pytest, 60 tests) covers: health, register/login/logout, validation, CSRF,
 items CRUD and isolation, bearer tokens, refresh rotation, reuse detection and the grace period,
 instant revocation of access and bearer tokens, login and password-change throttling,
 password change, user admin, registration toggle, activity log, PAM login/refresh/role sync
-(with a fake helper), terminal tickets, schema migration, avatars, item types, and the helper's
-socket protocol, terminal sessions and handshake limit.
+(with a fake helper), terminal tickets, schema migration, avatars, item types, the helper's
+socket protocol, terminal sessions and handshake limit, and the SSH menu (`test_ssh.py` and
+`test_api.py`): profile CRUD, validation, privacy, tickets, the admin switch, forgetting host keys,
+the locked-down `ssh` command line (also checked against the real OpenSSH client) and SSH sessions in a PTY.
 
 ```bash
 cd backend && .venv/bin/python -m pytest
 ```
 
-## 2.11 Extending the API
+## 2.12 Extending the API
 
 To add a new resource:
 

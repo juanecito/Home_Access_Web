@@ -14,12 +14,13 @@
     "5173": { "label": "HomeAcces (dev, hot reload)", "onAutoForward": "openBrowser" },
     "8443": { "label": "HomeAcces (nginx, production config)", "protocol": "https", "onAutoForward": "notify" },
     "8000": { "label": "Flask API", "onAutoForward": "silent" },
-    "8001": { "label": "homeacces-privd terminal", "onAutoForward": "silent" }
+    "8001": { "label": "homeacces-privd terminal", "onAutoForward": "silent" },
+    "8002": { "label": "homeacces-ssh terminal", "onAutoForward": "silent" }
   },
 
   // Installs the Python venv and npm packages, creates the dev config and database.
   "postCreateCommand": ".devcontainer/post-create.sh",
-  // Starts API + terminal helper + Vite in the background on every container start.
+  // Starts API + terminal helpers + Vite in the background on every container start.
   "postStartCommand": ".devcontainer/homeacces.sh start dev",
 
   "customizations": {

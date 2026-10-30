@@ -63,6 +63,21 @@ CREATE TABLE IF NOT EXISTS item_type_fields (
     UNIQUE (type_id, name)
 );
 
+-- Saved SSH connections of each user (SSH menu), opened by homeacces-ssh. The private key is
+-- never sent back to the browser: the API only reports whether one is set.
+CREATE TABLE IF NOT EXISTS ssh_profiles (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT    NOT NULL,
+    host        TEXT    NOT NULL,
+    port        INTEGER NOT NULL DEFAULT 22,
+    username    TEXT    NOT NULL,
+    private_key TEXT,   -- OpenSSH/PEM private key; NULL = password or keyboard-interactive login
+    created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (owner_id, name)
+);
+
 -- Settings changed by admins at runtime. A missing key means the default from the environment.
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,

@@ -38,4 +38,10 @@ class Config:
     PRIVD_SOCKET = os.environ.get("HOMEACCES_PRIVD_SOCKET", "/run/homeacces/privd.sock")
     TERMINAL_TICKET_TTL = timedelta(seconds=30)
 
+    # SSH client terminal for all users, served by homeacces-ssh. Default only: admins can switch it
+    # on/off in the UI. SSH_DIR holds each user's known_hosts file (shared with homeacces-ssh);
+    # unset means "ssh" next to the database, as in homeacces_ssh.
+    SSH_ENABLED = _bool("HOMEACCES_SSH_ENABLED", "1")
+    SSH_DIR = os.environ.get("HOMEACCES_SSH_DIR")
+
     MAX_CONTENT_LENGTH = 64 * 1024

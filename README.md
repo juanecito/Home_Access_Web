@@ -4,10 +4,12 @@ A small full-stack site: **nginx** serves a **React** UI and proxies `/api` to a
 API backed by **SQLite**. Authentication uses **JWT** stored in **HttpOnly cookies**, with CSRF
 protection, refresh-token rotation and login throttling. Users can sign in with a HomeAcces account
 or with their **Raspberry Pi system account (PAM)**; PAM sessions get a **web terminal** (xterm.js).
+Every user also gets an **SSH menu**: saved SSH connections opened in the browser with the OpenSSH client.
 
 ```
 browser ──HTTPS──> nginx ──┬── /                 → /var/www/homeacces (React build)
                            ├── /api/terminal/ws  → homeacces-privd 127.0.0.1:8001 (root) → PTY: runuser -l <user>
+                           ├── /api/ssh/ws       → homeacces-ssh 127.0.0.1:8002 (homeacces) → PTY: ssh <saved connection>
                            └── /api/*            → gunicorn /run/homeacces-api.sock (Flask, user homeacces) → SQLite
                                                       │
                                                       └── Unix socket /run/homeacces/privd.sock → homeacces-privd (PAM)
@@ -29,11 +31,14 @@ backend/            Flask API
   app/activity.py     activity log: SQLite table + append-only log file
   app/settings.py     runtime settings stored in SQLite (e.g. registration on/off)
   app/terminal.py     /api/terminal/ticket (single-use terminal tickets)
+  app/ssh.py          /api/ssh/*: saved SSH connections, SSH tickets
   app/privd.py        client for the privileged helper's Unix socket
   app/schema.sql      database schema
   homeacces_privd/        privileged helper (root): PAM checks + terminal WebSocket/PTY
+  homeacces_ssh/          SSH terminal service (user homeacces): OpenSSH client in a WebSocket/PTY
+  webterm.py          WebSocket ↔ PTY bridge shared by both terminal services
   tests/              pytest suite
-frontend/           React + Vite UI (login/register, items, account, admin: users/settings/activity)
+frontend/           React + Vite UI (login/register, items, SSH, account, admin: users/settings/activity)
 deploy/             nginx site, systemd unit, env template, install scripts
 ```
 
@@ -56,12 +61,13 @@ for a public site, replace `/etc/ssl/homeacces/homeacces.*` with a real certific
 
 | What | Where |
 |---|---|
-| Config (secret key, TTLs, registration) | `/etc/homeacces/homeacces.env` → `sudo systemctl restart homeacces homeacces-privd` |
+| Config (secret key, TTLs, registration) | `/etc/homeacces/homeacces.env` → `sudo systemctl restart homeacces homeacces-privd homeacces-ssh` |
 | Database | `/var/lib/homeacces/homeacces.sqlite3` |
 | Backend code + venv | `/opt/homeacces` |
 | UI files | `/var/www/homeacces` |
 | PAM service | `/etc/pam.d/homeacces` |
-| Logs | `journalctl -u homeacces -u homeacces-privd -f`, `/var/log/nginx/` |
+| Logs | `journalctl -u homeacces -u homeacces-privd -u homeacces-ssh -f`, `/var/log/nginx/` |
+| Saved SSH host keys (one `known_hosts` file per user) | `/var/lib/homeacces/ssh/known_hosts/<user id>` |
 | Activity log (sign-ins, account and item changes) | Admin → Activity log in the UI, and `/var/log/homeacces/activity.log` (rotated weekly, kept 52 weeks) |
 
 `install.sh` creates `/etc/homeacces/homeacces.env` with `deploy/gen-env.sh`. You can also run it yourself
@@ -70,6 +76,7 @@ for a public site, replace `/etc/ssl/homeacces/homeacces.*` with a real certific
 ```bash
 sudo ./deploy/gen-env.sh --no-registration --idle 15   # first time: new secret key, custom settings
 sudo ./deploy/gen-env.sh --force --no-pam              # rebuild from defaults, keep the secret key, back up the old file
+sudo ./deploy/gen-env.sh --force --no-ssh              # SSH menu off by default (admins can still switch it on)
 sudo ./deploy/gen-env.sh --force --rotate-secret       # new secret key (signs everyone out)
 sudo ./deploy/gen-env.sh --update                      # only add settings introduced by newer versions
 ./deploy/gen-env.sh --print                            # preview without writing
@@ -85,7 +92,7 @@ Backup: `sqlite3 /var/lib/homeacces/homeacces.sqlite3 ".backup /root/homeacces-$
 ## Dev container (Docker, Debian 13)
 
 `.devcontainer/` runs the whole site in a Debian 13 container: Python, Node, nginx, PAM and the
-web terminal, as on the Pi.
+web terminals (local and SSH), as on the Pi.
 
 **VS Code:** install the *Dev Containers* extension, then run **Dev Containers: Reopen in Container**.
 On first start it installs the dependencies, creates the database and starts the site. Open
@@ -103,7 +110,7 @@ Manage the services from a terminal in the container (Docker has no systemd):
 ```bash
 .devcontainer/homeacces.sh start dev    # Flask --debug + Vite hot reload → :5173 (default)
 .devcontainer/homeacces.sh start prod   # production build behind the real nginx config → https://localhost:8443
-.devcontainer/homeacces.sh status | stop | logs [api|privd|ui|nginx]
+.devcontainer/homeacces.sh status | stop | logs [api|privd|ssh|ui|nginx]
 cd backend && .venv/bin/python -m pytest
 ```
 
@@ -138,7 +145,10 @@ export HOMEACCES_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_ur
 # Optional, for PAM login + terminal (needs root; set HOMEACCES_PAM_ENABLED=1 for the API too):
 sudo -E .venv/bin/python -m homeacces_privd     # with HOMEACCES_PRIVD_SOCKET pointing somewhere writable
 
-# UI (second terminal) — Vite proxies /api to :8000
+# Optional, for the SSH menu (as your own user, same HOMEACCES_SECRET_KEY as the API):
+.venv/bin/python -m homeacces_ssh               # WebSocket on 127.0.0.1:8002
+
+# UI (second terminal) — Vite proxies /api to :8000 (and the terminal WebSockets to :8001 / :8002)
 cd frontend && npm install && npm run dev     # http://localhost:5173
 ```
 
@@ -212,14 +222,15 @@ Field types: `int`, `float`, `boolean`, `string`. Field names: lowercase letters
 
 | Method | Path | Body / query |
 |---|---|---|
-| GET | `/api/admin/settings` | – → `{allow_registration, activity_log_file, activity_retention_days}` |
-| PUT | `/api/admin/settings` | `allow_registration` (boolean) |
+| GET | `/api/admin/settings` | – → `{allow_registration, ssh_enabled, activity_log_file, activity_retention_days}` |
+| PUT | `/api/admin/settings` | `allow_registration` and/or `ssh_enabled` (booleans) |
 | GET | `/api/admin/activity` | `?user=&event=&result=success\|failure&limit=50&offset=0` → `{entries, total, events}`. `event` is exact (`auth.login`) or a prefix ending in `.` (`auth.`) |
 
 Recorded events: `auth.login` (success and failure, with `method`, `client` and `reason`), `auth.logout`,
 `auth.register`, `auth.password_change`, `auth.token_reuse`, `auth.session_revoked`, `terminal.open`,
 `user.create` / `user.update` / `user.delete`, `settings.update`, `item.create` / `item.update` /
-`item.delete`, `item_type.create` / `item_type.update` / `item_type.delete`. Each entry is also appended to `HOMEACCES_ACTIVITY_LOG` as one line, e.g.:
+`item.delete`, `item_type.create` / `item_type.update` / `item_type.delete`, `ssh.profile_create` /
+`ssh.profile_update` / `ssh.profile_delete`, `ssh.host_key_forget`, `ssh.open`. Each entry is also appended to `HOMEACCES_ACTIVITY_LOG` as one line, e.g.:
 
 ```
 2026-10-29T21:40:02.118Z event=auth.login result=failure user="alice" ip="192.168.1.20" method="local" client="browser" reason="invalid credentials" ua="Mozilla/5.0 ..."
@@ -234,6 +245,25 @@ Recorded events: `auth.login` (success and failure, with `method`, `client` and 
 
 The shell runs as the signed-in system user (`runuser --login`), with the same rights that user
 has over SSH. It closes after 30 minutes without keyboard input (`HOMEACCES_TERMINAL_IDLE_MIN`).
+
+### SSH — every signed-in user, own connections only
+
+Each user keeps a private list of SSH connections (not visible to anyone else, admins included).
+Passwords are never stored: OpenSSH asks for them, for key passphrases and for unknown host keys
+in the terminal.
+
+| Method | Path | Body / notes |
+|---|---|---|
+| GET | `/api/ssh/profiles` | – → `{profiles: [{id, name, host, port, username, has_key, created_at, updated_at}], enabled}` |
+| POST | `/api/ssh/profiles` | `name`, `host`, `port` (default 22), `username`, `private_key` (optional, OpenSSH/PEM) → 201. Max 100 per user |
+| PUT | `/api/ssh/profiles/<id>` | same fields; `private_key` left out keeps the saved key, `null` or `""` removes it |
+| DELETE | `/api/ssh/profiles/<id>` | – → 204 |
+| DELETE | `/api/ssh/profiles/<id>/host-key` | – → `{removed}`: forgets the server's saved host key (e.g. after a reinstall) |
+| POST | `/api/ssh/ticket` | `profile_id` → `{ticket, expires_in: 30}`; 403 when an admin disabled the SSH menu |
+| WS | `/api/ssh/ws` | Same protocol as `/api/terminal/ws` |
+
+The private key is write-only: the API only reports `has_key`. SSH sessions close after
+`HOMEACCES_TERMINAL_IDLE_MIN` minutes without keyboard input too.
 
 ### Health
 
@@ -258,6 +288,20 @@ has over SSH. It closes after 30 minutes without keyboard input (`HOMEACCES_TERM
 - xterm.js needs `style-src 'unsafe-inline'` in the CSP, which nginx allows. Scripts are still `'self'` only.
 - Turn the feature off with `HOMEACCES_PAM_ENABLED=0` and `sudo systemctl disable --now homeacces-privd`.
 
+**SSH menu** — every user can open SSH connections from the Pi, so:
+
+- `homeacces-ssh` runs the OpenSSH client as the unprivileged `homeacces` user (hardened systemd
+  unit), never as root. Connections come from the Pi's address, so they can reach hosts on its network.
+- `ssh` is started without a config file and without escape character, port/agent/X11 forwarding,
+  local commands, agent or connection sharing; it only offers the connection's own key. Host, port
+  and remote user are validated so they cannot be read as options.
+- Each web user has their own `known_hosts` file: new host keys are confirmed in the terminal, changed
+  ones are refused (until the user forgets the old key), and users never trust each other's servers.
+- Saved private keys are stored **unencrypted in the database** (written to a private 0600 temp file
+  only while a session runs). Prefer keys protected by a passphrase, which is asked for in the terminal.
+- Admins can switch the SSH menu off in Admin → Settings (default: `HOMEACCES_SSH_ENABLED`), or stop
+  it entirely with `sudo systemctl disable --now homeacces-ssh`.
+
 **General**
 
 - Passwords hashed with scrypt (Werkzeug). JWTs are HS256, signed with `HOMEACCES_SECRET_KEY`.
@@ -277,8 +321,8 @@ has over SSH. It closes after 30 minutes without keyboard input (`HOMEACCES_TERM
   unit runs it as the unprivileged `homeacces` user with a read-only filesystem except `/var/lib/homeacces`.
 - Scripts that run Flask commands (`install.sh`, `create-admin.sh`) let the `homeacces` user read the
   env file itself; the secret key never appears on a command line (visible to all users in `ps`).
-- The terminal helper accepts at most 32 connections that have not authenticated yet; nginx allows 8
-  terminal connections per IP.
+- Each terminal service accepts at most 32 connections that have not authenticated yet; nginx allows 8
+  terminal connections (local and SSH together) per IP.
 - nginx sends HSTS, CSP (`default-src 'self'`), `X-Frame-Options: DENY` and `nosniff`.
 
 ## Adapting it

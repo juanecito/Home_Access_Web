@@ -4,7 +4,7 @@ from flask import current_app
 from .db import get_db
 
 # setting key -> config key that holds its default
-DEFAULTS = {"allow_registration": "ALLOW_REGISTRATION"}
+DEFAULTS = {"allow_registration": "ALLOW_REGISTRATION", "ssh_enabled": "SSH_ENABLED"}
 
 
 def get_bool(key):
@@ -21,3 +21,7 @@ def set_bool(key, value):
 
 def allow_registration():
     return get_bool("allow_registration")
+
+
+def ssh_enabled():
+    return get_bool("ssh_enabled")

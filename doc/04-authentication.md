@@ -2,8 +2,9 @@
 
 [← Database](03-database.md) · [Index](README.md) · Next: [Frontend →](05-frontend.md)
 
-Code: `backend/app/auth.py`, `backend/app/terminal.py`, `backend/app/privd.py`,
-`backend/homeacces_privd/`, `frontend/src/api.js`, `frontend/src/AuthContext.jsx`.
+Code: `backend/app/auth.py`, `backend/app/terminal.py`, `backend/app/ssh.py`, `backend/app/privd.py`,
+`backend/homeacces_privd/`, `backend/homeacces_ssh/`, `backend/webterm.py`, `frontend/src/api.js`,
+`frontend/src/AuthContext.jsx`.
 
 ## 4.1 Overview
 
@@ -24,6 +25,7 @@ flowchart LR
     AMR --> T{"amr == 'pam'?"}
     T -- yes --> TERM["Web terminal allowed"]
     T -- no --> NOTERM["No terminal"]
+    AMR --> SSHM["SSH menu: any method<br/>(unless an admin disabled it)"]
 ```
 
 | Concept | Implementation |
@@ -67,6 +69,14 @@ classDiagram
         sub : user id
         type : "terminal"
         pam_user : system username
+        jti : uuid4, single use
+        iat
+        exp : iat + 30 s
+    }
+    class SshTicket {
+        sub : user id
+        type : "ssh"
+        profile_id : ssh_profiles.id of the user
         jti : uuid4, single use
         iat
         exp : iat + 30 s
@@ -202,8 +212,8 @@ Logout, a password change and token-reuse detection revoke sessions in the datab
 `require_auth` rejects access tokens of revoked sessions at once. Bearer tokens from
 `/api/auth/token` are backed by a session row too, so a password change ends them as well.
 Two cases still wait for the next refresh (≤ 15 min): a system account that was locked or
-removed from `homeacces-pam`, and a terminal that is already open (it stays open until it is
-closed or idle).
+removed from `homeacces-pam`, and a terminal or SSH session that is already open (it stays open
+until it is closed or idle).
 
 ## 4.6 PAM (system account) login
 
@@ -284,7 +294,64 @@ sequenceDiagram
 | Removed / locked system user | Policy + `pam_acct_mgmt` on every terminal start |
 | Resource exhaustion | Per-user (4) and global (16) session limits, max 32 unauthenticated handshakes, nginx max 8 connections per IP, 256 KiB message cap, output backpressure, idle timeout |
 
-## 4.8 Bearer tokens for scripts
+## 4.8 SSH menu authentication and security
+
+The SSH terminal uses the same ticket scheme (`webterm.py` is shared), with a ticket of
+`type: "ssh"` naming one of the user's saved connections. Any signed-in user may get one, whatever
+the sign-in method, unless an admin switched the SSH menu off.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as SshTerminals (TerminalView)
+    participant A as Flask /api/ssh/ticket
+    participant N as nginx
+    participant S as homeacces-ssh :8002 (user homeacces)
+    participant D as SQLite
+    participant R as Remote SSH server
+
+    T->>A: POST /api/ssh/ticket {profile_id} (cookie + CSRF)
+    A->>A: ssh_enabled? (403 if off), profile owned by g.user? (404 if not)
+    A->>A: activity ssh.open
+    A-->>T: {ticket (JWT type=ssh, sub, profile_id, 30 s), expires_in:30}
+    T->>N: new WebSocket wss://host/api/ssh/ws
+    N->>S: Upgrade (Host, Origin, X-Real-IP)
+    S->>S: path == /api/ssh/ws, Origin host == Host
+    T->>S: {"type":"auth","ticket":…,"cols":120,"rows":40}  (≤ 10 s)
+    S->>S: verify JWT signature/type/exp, jti not used before
+    S->>S: limits: ≤ 4 per user, ≤ 16 total
+    S->>D: SELECT profile WHERE id = profile_id AND owner_id = sub
+    S->>S: private key? → 0600 temp file in a private temp dir
+    S->>R: openpty() + setsid --ctty ssh -F /dev/null -e none -o … -- host
+    S-->>T: ssh prompts (new host key, password, key passphrase), answered in the terminal
+    loop session
+        T->>S: {"type":"input",…} / {"type":"resize",…}
+        S-->>T: binary frames
+    end
+    Note over S: 30 min without input → close "idle timeout", key file deleted
+```
+
+| Threat | Mitigation |
+|---|---|
+| Cross-site WebSocket hijacking, ticket replay | Same as the local terminal: CSRF-protected ticket POST, `Origin` == `Host`, single-use `jti`, 30 s lifetime |
+| Using someone else's connection | Profiles are filtered by `owner_id` in the API **and** again in homeacces-ssh against the ticket's `sub`; admins cannot see others' profiles either |
+| Escaping from SSH to the Pi | `ssh` runs as the unprivileged `homeacces` user in a hardened unit (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, `NoNewPrivileges`, no capabilities); no `ssh_config`, no escape character, no forwardings, no `LocalCommand`, no agent, no connection sharing |
+| Option injection through host / user | Strict validation (no leading `-`, no `%`/`$`, no spaces), destination after `--` |
+| Trusting another user's servers / MITM | One `known_hosts` file per web user, no global file; new keys are confirmed by the user, changed keys are refused until the user forgets the old one ("Forget host key") |
+| Password theft from the database | Passwords and passphrases are never stored, only typed in the terminal |
+| Resource exhaustion | Per-user (4) and global (16) session limits, max 32 unauthenticated handshakes, shared nginx limit of 8 terminal connections per IP, idle timeout |
+
+**Saved private keys** are stored unencrypted in `ssh_profiles.private_key`, and while a session runs
+also in a 0600 temp file in the service's private `/tmp`. Anyone who can read the database (root,
+the `homeacces` user, database backups) can read them. They are never sent back to the browser.
+Users should save only keys protected by a passphrase (`ssh` asks for it in the terminal).
+
+The SSH client connects **from the Pi**, so users can reach any host the Pi can reach (including
+the local network). Admins can switch the SSH menu off in Admin → Settings (new tickets are refused;
+open sessions continue until closed or idle), or remove the feature with
+`sudo systemctl disable --now homeacces-ssh`.
+
+## 4.9 Bearer tokens for scripts
 
 ```bash
 TOKEN=$(curl -sk https://pi.local/api/auth/token -H 'Content-Type: application/json' \
@@ -296,14 +363,14 @@ curl -sk https://pi.local/api/items -H "Authorization: Bearer $TOKEN"
 `expires_in` seconds. No CSRF header is needed for Bearer requests. A password change or
 "revoke all" (token reuse) invalidates bearer tokens immediately.
 
-## 4.9 Defence in depth
+## 4.10 Defence in depth
 
 ```mermaid
 flowchart TB
     subgraph L1["nginx"]
         a1["TLS 1.2/1.3 only, HTTP→HTTPS"]
         a2["HSTS, CSP default-src 'self',<br/>X-Frame-Options DENY, nosniff, Referrer-Policy"]
-        a3["Rate limit on auth endpoints,<br/>connection limit on the terminal"]
+        a3["Rate limit on auth endpoints,<br/>connection limit on the terminals"]
         a4["client_max_body_size 64k"]
     end
     subgraph L2["Flask API"]
@@ -324,11 +391,19 @@ flowchart TB
         d2["SO_PEERCRED on Unix socket (0660)"]
         d3["Own policy check on every operation"]
     end
+    subgraph L5["SSH service (homeacces-ssh)"]
+        e1["User homeacces, hardened unit,<br/>keys only in PrivateTmp while in use"]
+        e2["Locked-down ssh command line"]
+        e3["Per-user known_hosts"]
+    end
     L1 --> L2 --> L3 --> L4
+    L3 --> L5
 ```
 
 The CSP allows `style-src 'unsafe-inline'` because xterm.js sets inline styles; **scripts remain
-`'self'` only**. `connect-src` permits `wss://<host>` for the terminal.
+`'self'` only**. `connect-src` permits `wss://<host>` for the terminals.
 
 To disable the PAM/terminal feature entirely: set `HOMEACCES_PAM_ENABLED=0` and run
-`sudo systemctl disable --now homeacces-privd`.
+`sudo systemctl disable --now homeacces-privd`. To disable the SSH menu: switch it off in Admin →
+Settings (or `HOMEACCES_SSH_ENABLED=0` before an admin changed it) and run
+`sudo systemctl disable --now homeacces-ssh`.
