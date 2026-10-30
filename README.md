@@ -83,11 +83,29 @@ sudo ./deploy/gen-env.sh --update                      # only add settings intro
 ```
 
 `install.sh` builds the UI as the owner of the source folder (not root), using `npm ci`.
-Building the React app on a Pi 3 or older is slow. You can run `npm ci && npm run build` in
-`frontend/` on another machine, copy `frontend/dist` to the Pi, and run
-`sudo SKIP_FRONTEND_BUILD=1 ./deploy/install.sh`. Re-run `install.sh` to deploy updates.
+Re-run `install.sh` to deploy updates.
 
 Backup: `sqlite3 /var/lib/homeacces/homeacces.sqlite3 ".backup /root/homeacces-$(date +%F).sqlite3"`
+
+### Building the UI on another machine (`SKIP_FRONTEND_BUILD`)
+
+Node is only needed to build the UI. The site itself runs without it: nginx serves the static
+files in `frontend/dist` (about 0.5 MB), and the backend is Python. Building on a Pi 3 or older
+is slow and `node_modules` takes about 80 MB, so you can build elsewhere instead:
+
+```bash
+# on a faster machine (any OS with Node)
+cd frontend && npm ci && npm run build
+rsync -a dist/ pi@raspberrypi.local:homeacces/frontend/dist/
+
+# on the Pi
+sudo SKIP_FRONTEND_BUILD=1 ./deploy/install.sh
+```
+
+With `SKIP_FRONTEND_BUILD=1`, `install.sh` does not install `nodejs`/`npm` and does not run npm.
+It copies the existing `frontend/dist` to `/var/www/homeacces`, and stops with
+`frontend/dist is missing` if there is no `frontend/dist/index.html`. Rebuild and copy `dist/`
+again whenever the frontend changes; otherwise the Pi keeps serving the old UI.
 
 ## Dev container (Docker, Debian 13)
 
