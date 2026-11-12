@@ -51,6 +51,9 @@ METHODS = ("local", "pam")
 API_TOKEN_PREFIX = "hat_"
 API_TOKEN_AMR = "token"
 API_TOKEN_TOUCH_SECONDS = 60  # last_used_at is written at most this often per token
+# HTTP methods a personal access token can be allowed to use (`api_tokens.methods`). HEAD and
+# OPTIONS are read-only and count as GET.
+API_TOKEN_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 PAM_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
@@ -309,6 +312,12 @@ def revoke_api_tokens(user_id, reason):
     return deleted
 
 
+def api_token_methods(row):
+    """The HTTP methods an `api_tokens` row allows, as a list in API_TOKEN_METHODS order."""
+    allowed = set((row["methods"] or "").split(","))
+    return [m for m in API_TOKEN_METHODS if m in allowed]
+
+
 def _verify_api_token(secret, via):
     """Check a personal access token. Returns (user row, pseudo-claims) or aborts with 401."""
     db = get_db()
@@ -351,6 +360,7 @@ def _verify_api_token(secret, via):
                    (*updates.values(), row["id"]))
         db.commit()
     claims["role"] = user["role"]
+    claims["methods"] = api_token_methods(row)
     return user, claims
 
 
@@ -400,6 +410,12 @@ def require_auth(roles=None, allow_api_token=True):
                     authlog.event("access.forbidden", claims=claims, user=user, level=logging.WARNING,
                                   reason="personal access tokens are not accepted here")
                     abort(403, "this action requires signing in; personal access tokens are not accepted")
+                method = "GET" if request.method in SAFE_METHODS else request.method
+                if method not in claims["methods"]:
+                    authlog.event("access.forbidden", claims=claims, user=user, level=logging.WARNING,
+                                  reason="HTTP method not allowed for this personal access token",
+                                  method=request.method, allowed=",".join(claims["methods"]))
+                    abort(403, f"this personal access token does not allow {request.method} requests")
             else:
                 user, claims = _verify_jwt_access(token, from_cookie, via)
             if roles and user["role"] not in roles:

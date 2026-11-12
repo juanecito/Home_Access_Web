@@ -400,7 +400,10 @@ sequenceDiagram
         end
     end
     A->>D: last_used_at / last_used_ip (at most once a minute)
-    A->>A: role check on the users row, g.claims = {type:"api_token", amr:"token", pat_id}
+    alt request method not in api_tokens.methods (HEAD/OPTIONS count as GET)
+        A-->>S: 403 this personal access token does not allow … requests
+    end
+    A->>A: role check on the users row, g.claims = {type:"api_token", amr:"token", pat_id, methods}
     A-->>S: 200
 ```
 
@@ -411,6 +414,7 @@ sequenceDiagram
 | Lifetime | 1–365 days, or no expiry (`expires_in_days: null`); the UI defaults to 90 days |
 | Creation | Needs a browser session (CSRF) **and the current password** (system password through PAM for PAM users), throttled 5 failures / 15 min per account, so a stolen session cannot quietly mint a lasting credential. At most 20 tokens per user, names unique per user |
 | Scope | Acts as the owner with the owner's *current* role. Refused with 403 by `require_auth(allow_api_token=False)` on: token management, password change, terminal and SSH tickets |
+| Methods | Each token lists the HTTP methods it may use (`methods` at creation: any non-empty subset of GET, POST, PUT, PATCH, DELETE; default all). HEAD and OPTIONS count as GET, so `["GET"]` gives a read-only token. Other methods get 403 and an `access.forbidden` log line. Fixed at creation: to change them, create a new token |
 | Revocation | Deleting a token (Account page) ends it at once. A password change by the user or an admin deletes all of the user's tokens; deleting the user deletes them (cascade). PAM accounts are re-checked every 15 min (`HOMEACCES_ACCESS_TTL_MIN`) |
 | CSRF | Not applicable: a token is only accepted from the `Authorization` header, never from a cookie |
 

@@ -208,12 +208,14 @@ All three need a signed-in browser session (or a `/token` JWT); a personal acces
 
 | Method | Path | Body → Response |
 |---|---|---|
-| GET | `/api/auth/tokens` | → `{tokens: [{id, name, hint, created_at, expires_at, expired, last_used_at, last_used_ip}], max_tokens}` (own tokens only) |
-| POST | `/api/auth/tokens` | `{name, expires_in_days: 1–365 \| null, password}` → 201 `{token, secret}`; the `secret` (`hat_…`) is returned only here. 400 wrong password (5 / 15 min → 429) or 20 tokens reached, 409 duplicate name |
+| GET | `/api/auth/tokens` | → `{tokens: [{id, name, hint, methods, created_at, expires_at, expired, last_used_at, last_used_ip}], max_tokens}` (own tokens only) |
+| POST | `/api/auth/tokens` | `{name, expires_in_days: 1–365 \| null, methods?, password}` → 201 `{token, secret}`; the `secret` (`hat_…`) is returned only here. 400 wrong password (5 / 15 min → 429), invalid `methods` or 20 tokens reached, 409 duplicate name. `methods`: non-empty list of `GET`, `POST`, `PUT`, `PATCH`, `DELETE` (omitted or `null` = all) |
 | DELETE | `/api/auth/tokens/<id>` | → 204; 404 for another user's token |
 
 Any 🔑 endpoint accepts `Authorization: Bearer hat_…`, except the token endpoints above,
-`PUT /api/auth/password`, `POST /api/terminal/ticket` and `POST /api/ssh/ticket`. `GET /api/auth/me`
+`PUT /api/auth/password`, `POST /api/terminal/ticket` and `POST /api/ssh/ticket`, but only with the
+HTTP methods allowed for that token (HEAD and OPTIONS count as GET); any other method gets
+403 `this personal access token does not allow <METHOD> requests`. `GET /api/auth/me`
 reports `session: {method: "token"}`.
 
 ### Items — `items.py`, prefix `/api/items` (🔑; users see their own, admins see all)

@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     last_used_at INTEGER,                   -- unix time, updated at most once a minute
     last_used_ip TEXT,
     checked_at   INTEGER,                   -- last system-account check (PAM users only)
+    -- HTTP methods the token may use, comma-separated (HEAD and OPTIONS count as GET)
+    methods      TEXT    NOT NULL DEFAULT 'GET,POST,PUT,PATCH,DELETE',
     UNIQUE (user_id, name)
 );
 

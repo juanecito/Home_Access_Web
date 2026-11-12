@@ -11,6 +11,8 @@ const EXPIRY_OPTIONS = [
   { label: 'Never', days: null },
 ];
 const DEFAULT_EXPIRY = '90';
+// HTTP methods a token can be allowed to use (HEAD and OPTIONS count as GET).
+const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
 function formatDate(value) {
   return value ? new Date(value).toLocaleDateString() : null;
@@ -23,6 +25,7 @@ export default function ApiTokens() {
   const [maxTokens, setMaxTokens] = useState(null);
   const [name, setName] = useState('');
   const [expiry, setExpiry] = useState(DEFAULT_EXPIRY);
+  const [methods, setMethods] = useState(METHODS);
   const [password, setPassword] = useState('');
   const [created, setCreated] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -47,16 +50,22 @@ export default function ApiTokens() {
     setMessage(null);
     try {
       const days = expiry === 'never' ? null : Number(expiry);
-      const data = await api.post('/api/auth/tokens', { name, expires_in_days: days, password });
+      const data = await api.post('/api/auth/tokens', { name, expires_in_days: days, methods, password });
       setCreated({ name: data.token.name, secret: data.secret });
       setCopied(false);
-      setName(''); setPassword(''); setExpiry(DEFAULT_EXPIRY);
+      setName(''); setPassword(''); setExpiry(DEFAULT_EXPIRY); setMethods(METHODS);
       await load();
     } catch (err) {
       setMessage({ ok: false, text: err.message });
     } finally {
       setBusy(false);
     }
+  }
+
+  function toggleMethod(method) {
+    setMethods((current) => (current.includes(method)
+      ? current.filter((m) => m !== method)
+      : METHODS.filter((m) => m === method || current.includes(m))));
   }
 
   async function revoke(token) {
@@ -87,7 +96,8 @@ export default function ApiTokens() {
     <div className="card tokens-card">
       <h2>Personal access tokens</h2>
       <p className="muted">
-        Tokens let scripts call the API as you, with <code>Authorization: Bearer &lt;token&gt;</code>.
+        Tokens let scripts call the API as you, with <code>Authorization: Bearer &lt;token&gt;</code>,
+        limited to the HTTP methods you allow (only GET makes a read-only token).
         They cannot manage tokens, change your password or open terminals.
         {user.auth_source === 'local' && ' Changing your password deletes all of your tokens.'}
       </p>
@@ -115,13 +125,20 @@ export default function ApiTokens() {
         <div className="table-wrap">
           <table>
             <thead>
-              <tr><th>Name</th><th>Token</th><th>Expires</th><th>Last used</th><th /></tr>
+              <tr><th>Name</th><th>Token</th><th>Methods</th><th>Expires</th><th>Last used</th><th /></tr>
             </thead>
             <tbody>
               {tokens.map((t) => (
                 <tr key={t.id}>
                   <td>{t.name}<div className="muted small">created {formatDate(t.created_at)}</div></td>
                   <td><code>{t.hint}…</code></td>
+                  <td>
+                    {t.methods.length === METHODS.length
+                      ? <span className="muted">all</span>
+                      : <div className="token-methods">
+                          {t.methods.map((m) => <span key={m} className="badge">{m}</span>)}
+                        </div>}
+                  </td>
                   <td className="nowrap">
                     {t.expired
                       ? <span className="badge fail">expired</span>
@@ -159,6 +176,19 @@ export default function ApiTokens() {
             </select>
           </label>
         </div>
+        <fieldset className="token-methods-field">
+          <legend>Allowed methods</legend>
+          <div className="row wrap">
+            {METHODS.map((m) => (
+              <label key={m} className="checkbox">
+                <input type="checkbox" checked={methods.includes(m)} onChange={() => toggleMethod(m)} />
+                <code>{m}</code>
+              </label>
+            ))}
+            <button type="button" className="secondary small" onClick={() => setMethods(['GET'])}>Read-only</button>
+            <button type="button" className="secondary small" onClick={() => setMethods(METHODS)}>All</button>
+          </div>
+        </fieldset>
         <label>
           {user.auth_source === 'pam' ? 'Your system password' : 'Your password'}
           <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)}
@@ -166,8 +196,9 @@ export default function ApiTokens() {
         </label>
         {message && <p className={message.ok ? 'success' : 'error'}>{message.text}</p>}
         <div className="row end">
-          <button type="submit" disabled={busy || full}
-                  title={full ? `At most ${maxTokens} tokens: delete one first` : undefined}>
+          <button type="submit" disabled={busy || full || methods.length === 0}
+                  title={full ? `At most ${maxTokens} tokens: delete one first`
+                    : methods.length === 0 ? 'Allow at least one method' : undefined}>
             Create token
           </button>
         </div>

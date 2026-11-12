@@ -4,7 +4,8 @@ A token looks like `hat_<43 random URL-safe characters>` (256 bits) and is sent 
 `Authorization: Bearer hat_…`. It is shown once, at creation; the database keeps only its SHA-256
 (`api_tokens.token_hash`) and a short hint. Verification is done by `auth.require_auth`.
 
-A token acts as its owner with the owner's current role, but cannot be used to manage tokens,
+A token acts as its owner with the owner's current role, limited to the HTTP methods chosen at
+creation (`methods`, e.g. only GET for a read-only token), and cannot be used to manage tokens,
 change the password or open a terminal (`require_auth(allow_api_token=False)`). Creating one
 requires the current password, so a stolen browser session cannot quietly mint a lasting
 credential; a password change (or an admin password reset) deletes all of the user's tokens.
@@ -18,8 +19,8 @@ from werkzeug.security import check_password_hash
 
 from . import authlog, privd
 from .activity import record
-from .auth import (API_TOKEN_PREFIX, _record_failure, _too_many_failures, hash_api_token, json_body,
-                   require_auth)
+from .auth import (API_TOKEN_METHODS, API_TOKEN_PREFIX, _record_failure, _too_many_failures, api_token_methods,
+                   hash_api_token, json_body, require_auth)
 from .db import get_db
 
 bp = Blueprint("api_tokens", __name__, url_prefix="/api/auth/tokens")
@@ -39,6 +40,7 @@ def _serialize(row):
         "id": row["id"],
         "name": row["name"],
         "hint": row["hint"],
+        "methods": api_token_methods(row),
         "created_at": row["created_at"],
         "expires_at": _iso(row["expires_at"]),
         "expired": row["expires_at"] is not None and row["expires_at"] <= time.time(),
@@ -63,6 +65,20 @@ def _validate_expiry(value):
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_EXPIRY_DAYS:
         abort(400, f"expires_in_days must be an integer from 1 to {MAX_EXPIRY_DAYS}, or null for no expiry")
     return int(time.time()) + value * 86400
+
+
+def _validate_methods(value):
+    """`methods`: a non-empty list of HTTP methods the token may use; omitted or null = all of them."""
+    if value is None:
+        return list(API_TOKEN_METHODS)
+    allowed = ", ".join(API_TOKEN_METHODS)
+    if not isinstance(value, list) or not value or not all(isinstance(m, str) for m in value):
+        abort(400, f"methods must be a non-empty list of: {allowed}")
+    chosen = {m.strip().upper() for m in value}
+    unknown = chosen.difference(API_TOKEN_METHODS)
+    if unknown:
+        abort(400, f"unknown method {sorted(unknown)[0]!r}: methods must be among {allowed}")
+    return [m for m in API_TOKEN_METHODS if m in chosen]
 
 
 def _check_password(password):
@@ -103,6 +119,7 @@ def create_token():
     data = json_body()
     name = _validate_name(data.get("name"))
     expires_at = _validate_expiry(data.get("expires_in_days"))
+    methods = _validate_methods(data.get("methods"))
     _check_password(data.get("password"))
 
     db = get_db()
@@ -114,14 +131,16 @@ def create_token():
 
     secret = API_TOKEN_PREFIX + secrets.token_urlsafe(32)
     cur = db.execute(
-        "INSERT INTO api_tokens (user_id, name, token_hash, hint, expires_at) VALUES (?, ?, ?, ?, ?)",
-        (g.user["id"], name, hash_api_token(secret), secret[:len(API_TOKEN_PREFIX) + HINT_CHARS], expires_at),
+        "INSERT INTO api_tokens (user_id, name, token_hash, hint, expires_at, methods) VALUES (?, ?, ?, ?, ?, ?)",
+        (g.user["id"], name, hash_api_token(secret), secret[:len(API_TOKEN_PREFIX) + HINT_CHARS], expires_at,
+         ",".join(methods)),
     )
     db.commit()
     row = db.execute("SELECT * FROM api_tokens WHERE id = ?", (cur.lastrowid,)).fetchone()
     authlog.event("api_token.created", claims={"pat_id": row["id"]}, token=secret, user=g.user,
-                  expires=_iso(expires_at) or "never")
-    record("auth.token_create", token_id=row["id"], name=name, expires_at=_iso(expires_at) or "never")
+                  expires=_iso(expires_at) or "never", methods=",".join(methods))
+    record("auth.token_create", token_id=row["id"], name=name, expires_at=_iso(expires_at) or "never",
+           methods=methods)
     # The only time the secret leaves the server.
     return jsonify(token=_serialize(row), secret=secret), 201
 

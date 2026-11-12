@@ -217,8 +217,9 @@ Local accounts: change password (other sessions are signed out; after 5 wrong cu
 the API answers 429 for 15 minutes). PAM accounts: an explanation
 that the password is changed with `passwd`. Both: `AvatarSettings` — the image is cropped to a
 centred square and scaled to 60×60 **in the browser** (`<canvas>`), then sent as a data URL.
-Both: `ApiTokens` — lists the user's personal access tokens (hint, expiry, last use) and creates new
-ones (name, expiry, current password). The new secret is shown once, with a copy button and a `curl`
+Both: `ApiTokens` — lists the user's personal access tokens (hint, allowed methods, expiry, last use)
+and creates new ones (name, expiry, allowed HTTP methods with Read-only / All shortcuts, current
+password). The new secret is shown once, with a copy button and a `curl`
 example, and is kept only in component state until the user clicks Done.
 
 ### SSH (`pages/ssh/*`)

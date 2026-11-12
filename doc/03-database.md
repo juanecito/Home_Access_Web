@@ -56,6 +56,7 @@ erDiagram
         INTEGER last_used_at "unix time"
         TEXT last_used_ip
         INTEGER checked_at "PAM re-check"
+        TEXT methods "allowed HTTP methods"
     }
     login_failures {
         INTEGER id PK
@@ -163,6 +164,7 @@ list. Revoking a token deletes its row; a password change or reset deletes all r
 | `expires_at` | Unix time; `NULL` = never expires. Expired rows are kept (shown as expired) until the user deletes them |
 | `last_used_at`, `last_used_ip` | Written at most once a minute per token (or when the IP changes), to avoid a write per request |
 | `checked_at` | Last `pam_account` check of the owner (PAM users only); repeated after one access-token lifetime |
+| `methods` | Comma-separated HTTP methods the token may use (`GET,POST,PUT,PATCH,DELETE` by default; HEAD and OPTIONS count as GET). Rows from before this column existed are migrated with all methods |
 
 ### `login_failures`
 

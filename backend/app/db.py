@@ -48,6 +48,10 @@ def _migrate(conn):
     if "rotated_at" not in columns:
         conn.execute("ALTER TABLE refresh_tokens ADD COLUMN rotated_at INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_refresh_tokens_session ON refresh_tokens(session_id)")
+    if "methods" not in {row["name"] for row in conn.execute("PRAGMA table_info(api_tokens)")}:
+        # Tokens created before per-token methods existed keep full access.
+        conn.execute("ALTER TABLE api_tokens ADD COLUMN methods TEXT NOT NULL "
+                     "DEFAULT 'GET,POST,PUT,PATCH,DELETE'")
     conn.commit()
 
 

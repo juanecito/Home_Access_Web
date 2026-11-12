@@ -884,3 +884,59 @@ def test_personal_access_token_pam_user(app, privd):
         get_db().commit()
     privd.account_ok = False
     assert script.get("/api/items", headers=bearer(secret)).status_code == 401
+
+
+def test_personal_access_token_methods(app, client):
+    register(client)
+    # Default: every method, listed in a fixed order.
+    full = create_pat(client, name="full").json
+    assert full["token"]["methods"] == ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    item_id = client.post("/api/items", json={"title": "x"}, headers=bearer(full["secret"])).json["item"]["id"]
+
+    # Read-only token: GET (and HEAD) work, writes are refused with 403.
+    r = create_pat(client, name="read-only", methods=["get"])
+    assert r.status_code == 201 and r.json["token"]["methods"] == ["GET"]
+    h = bearer(r.json["secret"])
+    assert client.get("/api/items", headers=h).status_code == 200
+    assert client.head("/api/items", headers=h).status_code == 200
+    r = client.post("/api/items", json={"title": "y"}, headers=h)
+    assert r.status_code == 403 and "POST" in r.json["error"]
+    assert client.delete(f"/api/items/{item_id}", headers=h).status_code == 403
+
+    # Write-only token: cannot read.
+    h = bearer(create_pat(client, name="writer", methods=["DELETE", "POST", "POST"]).json["secret"])
+    assert client.get("/api/items", headers=h).status_code == 403
+    assert client.delete(f"/api/items/{item_id}", headers=h).status_code == 204
+
+    listed = {t["name"]: t["methods"] for t in client.get("/api/auth/tokens").json["tokens"]}
+    assert listed["writer"] == ["POST", "DELETE"] and listed["read-only"] == ["GET"]
+
+    # Browser sessions are not affected by token methods.
+    assert client.post("/api/items", json={"title": "z"}, headers=csrf(client)).status_code == 201
+
+
+def test_personal_access_token_methods_validation(client):
+    register(client)
+    for bad in ([], "GET", ["TRACE"], ["GET", 1], {"GET": True}, ["HEAD"]):
+        assert create_pat(client, name="t", methods=bad).status_code == 400, bad
+    assert create_pat(client, name="t", methods=None).json["token"]["methods"] == \
+        ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+
+def test_personal_access_token_methods_migration(tmp_path):
+    """Tokens created before per-token methods existed keep full access."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE api_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, "
+                 "name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL, "
+                 "created_at TEXT NOT NULL DEFAULT '', expires_at INTEGER, last_used_at INTEGER, "
+                 "last_used_ip TEXT, checked_at INTEGER, UNIQUE (user_id, name))")
+    conn.execute("INSERT INTO api_tokens (user_id, name, token_hash, hint) VALUES (1, 'old', 'h', 'hat_')")
+    conn.commit()
+    conn.close()
+    app = create_app({"TESTING": True, "SECRET_KEY": "x" * 48, "DATABASE": str(path),
+                      "ACTIVITY_LOG": str(tmp_path / "activity.log"), "SSH_DIR": str(tmp_path / "ssh")})
+    with app.app_context():
+        assert get_db().execute("SELECT methods FROM api_tokens").fetchone()[0] == "GET,POST,PUT,PATCH,DELETE"

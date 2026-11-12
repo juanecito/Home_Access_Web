@@ -188,7 +188,7 @@ All bodies are JSON. Errors look like `{"error": "...", "status": 4xx}`.
 | PUT | `/api/auth/password` | `current_password`, `new_password` | Signs out other sessions and bearer tokens, deletes personal access tokens; 5 wrong current passwords in 15 min → 429 |
 | POST | `/api/auth/token` | `username`, `password`, `method` | For scripts: returns `access_token` (Bearer), no cookies |
 | GET | `/api/auth/tokens` | – | Your personal access tokens (never the secrets) |
-| POST | `/api/auth/tokens` | `name`, `expires_in_days` (1–365 or `null`), `password` | Creates a personal access token; the `secret` is returned only once |
+| POST | `/api/auth/tokens` | `name`, `expires_in_days` (1–365 or `null`), `methods` (optional, e.g. `["GET"]`), `password` | Creates a personal access token; the `secret` is returned only once |
 | DELETE | `/api/auth/tokens/<id>` | – | Revokes one of your tokens |
 
 **Browser (cookies):** login sets `access_token` (HttpOnly, 15 min), `refresh_token` (HttpOnly,
@@ -204,9 +204,10 @@ curl -sk https://server.local/api/items -H "Authorization: Bearer $TOKEN"
 ```
 
 **Personal access tokens:** for unattended scripts, create a token in **Account → Personal access
-tokens** (name, expiry, your password) and send it the same way:
+tokens** (name, expiry, allowed HTTP methods, your password) and send it the same way:
 `curl -sk https://server.local/api/items -H "Authorization: Bearer hat_…"`. It acts as you with your
-current role, but cannot manage tokens, change your password or open terminals. Only its SHA-256 is
+current role, limited to the methods you allowed (e.g. only `GET` for a read-only token; others get
+403), and cannot manage tokens, change your password or open terminals. Only its SHA-256 is
 stored; changing your password deletes all your tokens.
 
 ### Items — users see their own, admins see all
@@ -343,8 +344,8 @@ The private key is write-only: the API only reports `has_key`. SSH sessions clos
 - Login throttling: 5 failures per IP+username in 15 minutes (app), plus 10 req/min per IP on
   login, register, token and password change (nginx). Wrong current passwords on password change are
   throttled per account too.
-- Personal access tokens are stored as SHA-256 hashes, can expire, and need the current password to
-  be created; they cannot open terminals, manage tokens or change the password, and a password change
+- Personal access tokens are stored as SHA-256 hashes, can expire, can be limited to some HTTP
+  methods (e.g. read-only), and need the current password to be created; they cannot open terminals, manage tokens or change the password, and a password change
   deletes them.
 - Self-registration is off by default. When it is on, a system username is reported as "username
   already taken", so registration cannot be used to list the server's accounts.
