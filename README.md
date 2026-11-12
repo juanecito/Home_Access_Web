@@ -108,6 +108,33 @@ It copies the existing `frontend/dist` to `/var/www/homeacces`, and stops with
 `frontend/dist is missing` if there is no `frontend/dist/index.html`. Rebuild and copy `dist/`
 again whenever the frontend changes; otherwise the server keeps serving the old UI.
 
+### Debian and Fedora packages (`.deb` / `.rpm`)
+
+`deploy/build-packages.sh` builds packages that install the same layout as `install.sh`.
+On install they create the `homeacces` user, the env file, the database and a self-signed
+certificate, then start the services:
+
+```bash
+./deploy/build-packages.sh                         # both, into ./dist (needs npm, dpkg-deb, rpmbuild)
+./deploy/build-packages.sh --deb --skip-frontend-build   # reuse frontend/dist, only the .deb
+./deploy/build-packages.sh --help                  # all options
+
+sudo apt install ./dist/homeacces_1.1.0-1_all.deb  # Debian 13
+sudo dnf install ./dist/homeacces-1.1.0-1.noarch.rpm   # Fedora
+sudo homeacces-create-admin admin
+```
+
+`rpmbuild` comes from `sudo apt install rpm` on Debian or `sudo dnf install rpm-build` on Fedora.
+By default the packages use the distribution's Python libraries (`python3-flask`, `python3-jwt`,
+`python3-gunicorn`, `python3-websockets`) instead of a venv. With `--venv`, the package creates
+`/opt/homeacces/venv` on install and pip-installs the pinned `requirements.txt`, which needs
+Internet access on the server. Fedora differences: nginx site in `/etc/nginx/conf.d/`, API socket
+owned by `nginx`, PAM via `password-auth`, and PAM admins come from the `wheel` group. You may
+need to open the firewall and, with SELinux enforcing, allow nginx to reach the API socket. The
+`.rpm` prints the commands for both after the first install.
+Removing the package stops the services. Purging the `.deb` also deletes `/etc/homeacces`, the
+certificate and the logs. The database in `/var/lib/homeacces` is always kept.
+
 ## Dev container (Docker, Debian 13)
 
 `.devcontainer/` runs the whole site in a Debian 13 container: Python, Node, nginx, PAM and the
