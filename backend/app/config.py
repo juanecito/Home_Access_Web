@@ -18,6 +18,8 @@ class Config:
     # same moment do not look like token theft. Later reuse revokes all of the user's sessions.
     REFRESH_REUSE_GRACE_SECONDS = 10
     JWT_ALGORITHM = "HS256"
+    # Token diagnostics on stderr (logger "homeacces.auth"): DEBUG also logs every verified access token.
+    AUTH_LOG_LEVEL = os.environ.get("HOMEACCES_AUTH_LOG_LEVEL", "INFO")
 
     # Secure cookies require HTTPS; set HOMEACCES_COOKIE_SECURE=0 only for local development.
     COOKIE_SECURE = _bool("HOMEACCES_COOKIE_SECURE", "1")

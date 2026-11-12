@@ -96,7 +96,7 @@ def update_user(user_id):
         password = validate_password(data["password"])
         db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
         db.commit()
-        revoke_all_refresh_tokens(user_id)
+        revoke_all_refresh_tokens(user_id, reason="password set by an admin")
         changed.append("password")
 
     db.commit()

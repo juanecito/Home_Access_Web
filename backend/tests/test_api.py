@@ -1,3 +1,4 @@
+import logging
 import os
 
 import pytest
@@ -156,6 +157,56 @@ def test_concurrent_refresh_within_grace_period(client):
     assert tab.post("/api/auth/refresh", headers={"X-CSRF-Token": old_csrf}).status_code == 200
     assert client.post("/api/auth/refresh", headers=csrf(client)).status_code == 200
     assert tab.get("/api/auth/me").status_code == 200
+
+
+@pytest.fixture
+def auth_log(caplog):
+    """Records of the "homeacces.auth" logger (it does not propagate to the root logger)."""
+    logger = logging.getLogger("homeacces.auth")
+    old_level = logger.level
+    logger.addHandler(caplog.handler)
+    logger.setLevel(logging.DEBUG)
+    yield lambda: [r.getMessage() for r in caplog.records if r.name == "homeacces.auth"]
+    logger.removeHandler(caplog.handler)
+    logger.setLevel(old_level)
+
+
+def test_auth_log_token_lifecycle(client, auth_log):
+    client.application.config["REFRESH_REUSE_GRACE_SECONDS"] = 0
+    register(client)
+    access = client.get_cookie("access_token").value
+    refresh_token = client.get_cookie("refresh_token", path="/api/auth").value
+    csrf_value = client.get_cookie("csrf_token").value
+    old_csrf = csrf(client)
+    assert client.get("/api/auth/me").status_code == 200
+    assert client.post("/api/auth/refresh", headers=old_csrf).status_code == 200
+    attacker = client.application.test_client()
+    attacker.set_cookie("refresh_token", refresh_token, path="/api/auth")
+    assert attacker.post("/api/auth/refresh", headers=old_csrf).status_code == 401
+    assert client.get("/api/items", headers={"Authorization": "Bearer garbage"}).status_code == 401
+
+    lines = auth_log()
+    text = "\n".join(lines)
+    issued = [ln for ln in lines if ln.startswith("event=token.issued")]
+    assert any('type="access"' in ln and 'user="alice"' in ln and 'delivery="cookie"' in ln for ln in issued)
+    assert any('type="refresh"' in ln and "sid=" in ln for ln in issued)
+    assert any(ln.startswith("event=token.verified") and 'via="cookie"' in ln for ln in lines)
+    assert any(ln.startswith("event=refresh.rotated") for ln in lines)
+    assert any(ln.startswith("event=refresh.reuse_detected") for ln in lines)
+    assert any(ln.startswith("event=session.revoke_all") and 'reason="refresh token reuse"' in ln for ln in lines)
+    assert any(ln.startswith("event=token.rejected") and "claims_verified=" in ln for ln in lines)
+    # Identified by fingerprint only: tokens, signatures and the CSRF value never reach the log.
+    for secret in (access, refresh_token, access.rsplit(".", 1)[1], csrf_value):
+        assert secret not in text
+
+
+def test_auth_log_csrf_and_forbidden(client, auth_log):
+    register(client)
+    assert client.post("/api/items", json={"title": "x"}).status_code == 403
+    assert client.get("/api/admin/settings").status_code == 403
+    lines = auth_log()
+    assert any(ln.startswith("event=csrf.failed") and 'reason="header missing"' in ln for ln in lines)
+    assert any(ln.startswith("event=access.forbidden") and 'actual_role="user"' in ln for ln in lines)
 
 
 def test_logout_revokes_access_token(client):

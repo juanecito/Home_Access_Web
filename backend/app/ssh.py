@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, abort, current_app, g, jsonify
 
-from . import settings
+from . import authlog, settings
 from .activity import record
 from .auth import encode_token, json_body, require_auth
 from .db import get_db
@@ -207,14 +207,16 @@ def ticket():
 
     now = datetime.now(timezone.utc)
     ttl = current_app.config["TERMINAL_TICKET_TTL"]
-    token = encode_token({
+    claims = {
         "type": "ssh",
         "sub": str(g.user["id"]),
         "profile_id": profile["id"],
         "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + ttl,
-    })
+    }
+    token = encode_token(claims)
+    authlog.event("ticket.issued", claims=claims, token=token, user=g.user, sid=g.claims.get("sid"))
     record("ssh.open", profile_id=profile["id"], host=profile["host"], port=profile["port"],
            remote_user=profile["username"])
     return jsonify(ticket=token, expires_in=int(ttl.total_seconds()))

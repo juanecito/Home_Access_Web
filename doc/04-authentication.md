@@ -407,3 +407,44 @@ To disable the PAM/terminal feature entirely: set `HOMEACCES_PAM_ENABLED=0` and 
 `sudo systemctl disable --now homeacces-privd`. To disable the SSH menu: switch it off in Admin →
 Settings (or `HOMEACCES_SSH_ENABLED=0` before an admin changed it) and run
 `sudo systemctl disable --now homeacces-ssh`.
+
+## 4.11 Token log
+
+Besides the activity log (what users did), the API writes a diagnostic log of what happened to
+their **tokens** (`backend/app/authlog.py`, logger `homeacces.auth`, stderr → journald):
+
+```bash
+journalctl -u homeacces -g homeacces.auth -f
+```
+
+```text
+INFO homeacces.auth: event=token.issued type="access" user_id=3 role="user" amr="local" sid="c69b…" jti="b7ba…"
+     iat="2026-11-12T09:33:21Z" exp="2026-11-12T09:48:21Z" user="alice" fp="aabda5f39c9a" delivery="cookie"
+     ip="192.168.1.20" path="/api/auth/login"
+```
+
+| Event | Level | When |
+|---|---|---|
+| `token.issued` | INFO | Access or refresh token created (login, register, `/token`, refresh, password change); `delivery` = `cookie` or `bearer` |
+| `ticket.issued` | INFO | Terminal or SSH ticket created, with the `sid` of the session that asked for it |
+| `token.verified` | DEBUG | Access token accepted by `require_auth`; `via` = `cookie` or `bearer` |
+| `token.missing` | DEBUG | Protected endpoint called without a token |
+| `token.rejected` | INFO / WARNING | `reason`: `expired` (INFO, routine), invalid signature or format, wrong type, session revoked, user deleted, refresh `jti` unknown |
+| `csrf.failed` | WARNING | Header missing or not matching the token's `csrf` claim |
+| `access.forbidden` | WARNING | Valid token, but the user's role is not allowed |
+| `refresh.rotated` | INFO | Refresh token exchanged for a new pair (same `sid`) |
+| `refresh.grace_reuse` | INFO | Just-rotated token reused within the grace period (second tab) |
+| `refresh.reuse_detected` | WARNING | Rotated/revoked refresh token replayed: all of the user's sessions are revoked |
+| `session.revoke_all` | INFO / WARNING | All sessions of a user revoked, with `reason` and `tokens_revoked` |
+| `session.logout` | INFO | Session ended by logout, with `tokens_revoked` |
+
+**Never logged:** the token string, its signature, the CSRF value or any password. A token is
+identified by its `jti` and `fp` (first 12 hex digits of the SHA-256 of the whole token), so a
+token seen in a browser or script can be matched against the log (`printf %s "$TOKEN" | sha256sum`)
+without the log becoming a source of usable credentials. For rejected tokens whose signature could
+not be verified the claims are shown with `claims_verified=false`: they may be forged.
+
+Set `HOMEACCES_AUTH_LOG_LEVEL` to `DEBUG` to trace every authenticated request, or `WARNING` to
+keep only failures. The terminal services (`homeacces-privd`, `homeacces-ssh`) log each ticket they
+accept or refuse (`ticket accepted` / `ticket rejected`, with `jti`, user id, `fp` and the reason,
+e.g. `already used (replay?)`).

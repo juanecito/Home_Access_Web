@@ -285,6 +285,7 @@ sudo usermod -aG sudo <user>                 # PAM user becomes web admin (at ne
 | API + helper + SSH logs | `journalctl -u homeacces -u homeacces-privd -u homeacces-ssh -f` |
 | HTTP access/errors | `/var/log/nginx/access.log`, `/var/log/nginx/error.log` |
 | Activity / audit | Admin → Activity log, or `tail -f /var/log/homeacces/activity.log` |
+| JWT / session events | `journalctl -u homeacces -g homeacces.auth -f`; ticket checks: `journalctl -u homeacces-privd -u homeacces-ssh -g ticket` |
 | Service status | `systemctl status homeacces homeacces-privd homeacces-ssh nginx` |
 | Health check | `curl -sk https://localhost/api/health` → `{"status":"ok"}` |
 

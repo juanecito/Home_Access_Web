@@ -17,6 +17,7 @@ Non-browser clients (scripts, curl) can call POST /api/auth/token and send
 import base64
 import binascii
 import hmac
+import logging
 import pwd
 import re
 import secrets
@@ -29,7 +30,7 @@ import jwt
 from flask import Blueprint, abort, current_app, g, jsonify, request
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from . import privd, settings
+from . import authlog, privd, settings
 from .activity import record
 from .db import get_db
 
@@ -161,17 +162,25 @@ def _decode(token, expected_type):
             options={"require": ["exp", "iat", "sub", "type", "jti"]},
         )
     except jwt.ExpiredSignatureError:
+        # The signature was checked before the expiry, so these claims are genuine.
+        authlog.event("token.rejected", claims=authlog.unverified_claims(token), token=token,
+                      expected=expected_type, reason="expired")
         abort(401, "token_expired")
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as exc:
+        authlog.event("token.rejected", claims=authlog.unverified_claims(token), token=token,
+                      level=logging.WARNING, expected=expected_type, reason=f"invalid: {exc}",
+                      claims_verified=False)
         abort(401, "invalid_token")
     if claims.get("type") != expected_type or claims.get("amr", "local") not in METHODS:
+        authlog.event("token.rejected", claims=claims, token=token, level=logging.WARNING,
+                      expected=expected_type, reason="wrong token type or sign-in method")
         abort(401, "invalid_token")
     return claims
 
 
 def issue_access_token(user, csrf, amr, sid):
     now = _now()
-    return encode_token({
+    claims = {
         "sub": str(user["id"]),
         "role": user["role"],
         "type": "access",
@@ -181,7 +190,11 @@ def issue_access_token(user, csrf, amr, sid):
         "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + current_app.config["ACCESS_TOKEN_TTL"],
-    })
+    }
+    token = encode_token(claims)
+    authlog.event("token.issued", claims=claims, token=token, user=user,
+                  delivery="bearer" if csrf is None else "cookie")
+    return token
 
 
 def _insert_session_row(user, session_id, exp):
@@ -199,14 +212,22 @@ def issue_refresh_token(user, csrf, amr, session_id):
     now = _now()
     exp = now + current_app.config["REFRESH_TOKEN_TTL"]
     jti = _insert_session_row(user, session_id, exp)
-    return encode_token({"sub": str(user["id"]), "type": "refresh", "amr": amr, "csrf": csrf,
-                         "jti": jti, "iat": now, "exp": exp})
+    claims = {"sub": str(user["id"]), "type": "refresh", "amr": amr, "csrf": csrf,
+              "jti": jti, "iat": now, "exp": exp}
+    token = encode_token(claims)
+    authlog.event("token.issued", claims=claims, token=token, user=user, sid=session_id or jti,
+                  delivery="cookie")
+    return token
 
 
-def revoke_all_refresh_tokens(user_id):
+def revoke_all_refresh_tokens(user_id, reason=None):
     db = get_db()
-    db.execute("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?", (user_id,))
+    # Rows already at 1 stay as they are; rotated ones (2) must become 1 to end the grace period.
+    revoked = db.execute("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ? AND revoked != 1",
+                         (user_id,)).rowcount
     db.commit()
+    authlog.event("session.revoke_all", user_id=user_id, tokens_revoked=revoked, reason=reason,
+                  level=logging.WARNING if reason == "refresh token reuse" else logging.INFO)
 
 
 def _session_active(session_id):
@@ -254,6 +275,9 @@ def _check_csrf(claims):
     sent = request.headers.get(CSRF_HEADER, "")
     expected = claims.get("csrf") or ""
     if not sent or not expected or not hmac.compare_digest(sent, expected):
+        authlog.event("csrf.failed", claims=claims, level=logging.WARNING,
+                      reason="header missing" if not sent else "token has no csrf claim" if not expected
+                      else "header does not match token")
         abort(403, "csrf_failed")
 
 
@@ -273,7 +297,9 @@ def require_auth(roles=None):
                 token, from_cookie = header[7:].strip(), False
             else:
                 token, from_cookie = request.cookies.get(ACCESS_COOKIE), True
+            via = "cookie" if from_cookie else "bearer"
             if not token:
+                authlog.event("token.missing", level=logging.DEBUG)
                 abort(401, "authentication_required")
 
             claims = _decode(token, "access")
@@ -283,13 +309,21 @@ def require_auth(roles=None):
             # tokens stop working at once instead of at expiry. (Tokens issued before
             # sessions existed carry no sid and simply run out.)
             if claims.get("sid") is not None and not _session_active(claims["sid"]):
+                authlog.event("token.rejected", claims=claims, token=token, via=via,
+                              reason="session revoked or expired")
                 abort(401, "invalid_token")
 
             user = _load_user(int(claims["sub"]))
             if user is None:
+                authlog.event("token.rejected", claims=claims, token=token, via=via,
+                              level=logging.WARNING, reason="user no longer exists")
                 abort(401, "invalid_token")
             if roles and user["role"] not in roles:
+                authlog.event("access.forbidden", claims=claims, user=user, level=logging.WARNING,
+                              required=",".join(roles), actual_role=user["role"])
                 abort(403, "forbidden")
+            authlog.event("token.verified", claims=claims, token=token, user=user, via=via,
+                          level=logging.DEBUG)
             g.user = user
             g.claims = claims
             return view(*args, **kwargs)
@@ -463,19 +497,29 @@ def refresh():
     db.commit()
     row = db.execute("SELECT * FROM refresh_tokens WHERE jti = ?", (claims["jti"],)).fetchone()
     if row is None:
+        authlog.event("token.rejected", claims=claims, token=token, level=logging.WARNING,
+                      reason="refresh token not found in database (expired and purged?)")
         abort(401, "invalid_token")
+    sid = row["session_id"] or row["jti"]
     if not rotated:
         # Another tab may have rotated this token a moment ago: allow that briefly.
         grace = current_app.config["REFRESH_REUSE_GRACE_SECONDS"]
         if row["revoked"] != 2 or row["rotated_at"] is None or now - row["rotated_at"] >= grace:
             # A rotated or revoked token was reused: assume theft and log the user out everywhere.
-            revoke_all_refresh_tokens(row["user_id"])
+            authlog.event("refresh.reuse_detected", claims=claims, token=token, sid=sid,
+                          level=logging.WARNING, db_state="revoked" if row["revoked"] == 1 else "rotated",
+                          rotated_seconds_ago=now - row["rotated_at"] if row["rotated_at"] else None)
+            revoke_all_refresh_tokens(row["user_id"], reason="refresh token reuse")
             record("auth.token_reuse", user=_load_user(row["user_id"]), success=False,
                    reason="rotated refresh token reused; all sessions revoked")
             abort(401, "invalid_token")
+        authlog.event("refresh.grace_reuse", claims=claims, token=token, sid=sid,
+                      rotated_seconds_ago=now - row["rotated_at"])
 
     user = _load_user(row["user_id"])
     if user is None:
+        authlog.event("token.rejected", claims=claims, token=token, level=logging.WARNING,
+                      reason="user no longer exists")
         abort(401, "invalid_token")
 
     amr = claims.get("amr", "local")
@@ -484,11 +528,12 @@ def refresh():
         # the allowed group means the web session ends too.
         reply = privd.call("pam_account", username=user["username"])
         if not current_app.config["PAM_ENABLED"] or not reply.get("ok"):
-            revoke_all_refresh_tokens(user["id"])
+            revoke_all_refresh_tokens(user["id"], reason="system account no longer allowed")
             record("auth.session_revoked", user=user, success=False, reason="system account no longer allowed")
             abort(401, "invalid_token")
         user = _sync_pam_user(user["username"], reply.get("groups", []))
-    return _session_response(user, amr, session_id=row["session_id"] or row["jti"])
+    authlog.event("refresh.rotated", claims=claims, token=token, user=user, sid=sid)
+    return _session_response(user, amr, session_id=sid)
 
 
 @bp.post("/logout")
@@ -502,14 +547,21 @@ def logout():
             )
             # End the whole session (all its rotated tokens), which also invalidates its access tokens.
             db = get_db()
-            db.execute("UPDATE refresh_tokens SET revoked = 1 WHERE jti = ? OR session_id = "
-                       "(SELECT session_id FROM refresh_tokens WHERE jti = ?)", (claims.get("jti"), claims.get("jti")))
+            revoked = db.execute(
+                "UPDATE refresh_tokens SET revoked = 1 WHERE jti = ? OR session_id = "
+                "(SELECT session_id FROM refresh_tokens WHERE jti = ?)", (claims.get("jti"), claims.get("jti")),
+            ).rowcount
             db.commit()
             user = _load_user(int(claims["sub"]))
+            authlog.event("session.logout", claims=claims, token=token, user=user, tokens_revoked=revoked)
             if user is not None:
                 record("auth.logout", user=user)
-        except (jwt.InvalidTokenError, KeyError, ValueError):
-            pass
+        except (jwt.InvalidTokenError, KeyError, ValueError) as exc:
+            authlog.event("session.logout", claims=authlog.unverified_claims(token), token=token,
+                          level=logging.WARNING, reason=f"refresh token not usable: {exc!r}",
+                          claims_verified=False)
+    else:
+        authlog.event("session.logout", level=logging.DEBUG, reason="no refresh cookie")
     return clear_auth_cookies(jsonify(ok=True))
 
 
@@ -541,7 +593,7 @@ def change_password():
     db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(new), g.user["id"]))
     db.execute("DELETE FROM login_failures WHERE key = ?", (key,))
     db.commit()
-    revoke_all_refresh_tokens(g.user["id"])
+    revoke_all_refresh_tokens(g.user["id"], reason="password change")
     record("auth.password_change")
     # Re-issue cookies for this session so the user stays logged in here only.
     return set_auth_cookies(jsonify(ok=True), g.user, "local")

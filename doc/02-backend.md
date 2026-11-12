@@ -154,6 +154,7 @@ loaded by systemd's `EnvironmentFile=`).
 | `HOMEACCES_DATABASE` | `backend/instance/homeacces.sqlite3` | SQLite file path |
 | `HOMEACCES_ACCESS_TTL_MIN` | `15` | Access token lifetime (minutes) |
 | `HOMEACCES_REFRESH_TTL_DAYS` | `7` | Refresh token lifetime (days) |
+| `HOMEACCES_AUTH_LOG_LEVEL` | `INFO` | Level of the token log `homeacces.auth` on stderr (see [4.11](04-authentication.md#411-token-log)); `DEBUG` adds one line per authenticated request, `WARNING` keeps only failures |
 | `HOMEACCES_COOKIE_SECURE` | `1` | `Secure` flag on cookies (set `0` only for plain-HTTP dev) |
 | `HOMEACCES_ALLOW_REGISTRATION` | `0` | Initial value for self-registration (admins can override in UI) |
 | `HOMEACCES_ACTIVITY_LOG` | `backend/instance/activity.log` | Activity text file (`""` = DB only) |

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, abort, current_app, g, jsonify
 
+from . import authlog
 from .activity import record
 from .auth import encode_token, require_auth
 
@@ -25,13 +26,15 @@ def ticket():
 
     now = datetime.now(timezone.utc)
     ttl = current_app.config["TERMINAL_TICKET_TTL"]
-    token = encode_token({
+    claims = {
         "type": "terminal",
         "sub": str(g.user["id"]),
         "pam_user": g.user["username"],
         "jti": uuid.uuid4().hex,
         "iat": now,
         "exp": now + ttl,
-    })
+    }
+    token = encode_token(claims)
+    authlog.event("ticket.issued", claims=claims, token=token, user=g.user, sid=g.claims.get("sid"))
     record("terminal.open")
     return jsonify(ticket=token, expires_in=int(ttl.total_seconds()))

@@ -10,6 +10,7 @@ WebSocket cannot be hijacked cross-site. Subclasses decide what a ticket allows 
 """
 import asyncio
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -62,21 +63,36 @@ class TerminalServer:
         """Return (argv, env, cleanup): the command for the PTY and a callable run when it ends (or None)."""
         raise NotImplementedError
 
-    def verify_ticket(self, token):
+    def verify_ticket(self, token, client="?"):
+        # Logged: jti, user id, type and a short SHA-256 fingerprint; never the ticket itself.
+        fp = hashlib.sha256(str(token).encode("utf-8", "replace")).hexdigest()[:12]
         try:
             claims = jwt.decode(
                 token, self.secret_key, algorithms=["HS256"],
                 options={"require": ["exp", "iat", "jti", "sub", "type", *self.ticket_claims]},
             )
-        except jwt.InvalidTokenError:
+        except jwt.InvalidTokenError as exc:
+            try:
+                seen = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
+            except jwt.InvalidTokenError:
+                seen = {}
+            log.warning("%s ticket rejected from=%s fp=%s reason=%r unverified: type=%r user_id=%r jti=%r",
+                        self.ticket_type, client, fp, str(exc), str(seen.get("type"))[:32],
+                        str(seen.get("sub"))[:32], str(seen.get("jti"))[:64])
             raise Denied("invalid ticket") from None
         if claims["type"] != self.ticket_type:
+            log.warning("%s ticket rejected from=%s fp=%s reason='wrong type %s' user_id=%s jti=%s",
+                        self.ticket_type, client, fp, claims["type"], claims["sub"], claims["jti"])
             raise Denied("invalid ticket")
         now = time.time()
         self.used_tickets = {j: e for j, e in self.used_tickets.items() if e > now}
         if claims["jti"] in self.used_tickets:
+            log.warning("%s ticket rejected from=%s fp=%s reason='already used (replay?)' user_id=%s jti=%s",
+                        self.ticket_type, client, fp, claims["sub"], claims["jti"])
             raise Denied("ticket already used")
         self.used_tickets[claims["jti"]] = claims["exp"]
+        log.info("%s ticket accepted from=%s fp=%s user_id=%s jti=%s expires_in=%ds",
+                 self.ticket_type, client, fp, claims["sub"], claims["jti"], int(claims["exp"] - now))
         return claims
 
     def _check_origin(self, ws):
@@ -99,7 +115,7 @@ class TerminalServer:
             hello = json.loads(await asyncio.wait_for(ws.recv(), 10))
             if hello.get("type") != "auth":
                 raise Denied("expected auth message")
-            claims = self.verify_ticket(hello.get("ticket", ""))
+            claims = self.verify_ticket(hello.get("ticket", ""), client)
             key = self.session_key(claims)
             if self.sessions.get(key, 0) >= self.max_per_user:
                 raise Denied("too many open terminals")
