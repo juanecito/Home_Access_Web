@@ -6,7 +6,7 @@ from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from . import admin, auth, authlog, db, item_types, items, ssh, terminal, users
+from . import admin, api_tokens, auth, authlog, db, item_types, items, ssh, terminal, users
 from .activity import record
 from .config import Config
 
@@ -30,6 +30,7 @@ def create_app(overrides=None):
     with app.app_context():
         db.init_db()
     app.register_blueprint(auth.bp)
+    app.register_blueprint(api_tokens.bp)
     app.register_blueprint(items.bp)
     app.register_blueprint(item_types.bp)
     app.register_blueprint(users.bp)

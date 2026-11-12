@@ -17,7 +17,7 @@ bp = Blueprint("terminal", __name__, url_prefix="/api/terminal")
 
 
 @bp.post("/ticket")
-@require_auth()
+@require_auth(allow_api_token=False)
 def ticket():
     if not current_app.config["PAM_ENABLED"]:
         abort(404, "terminal is disabled")

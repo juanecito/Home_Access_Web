@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api.js';
+import ApiTokens from '../ApiTokens.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import AvatarSettings from '../AvatarSettings.jsx';
 import PasswordInput from '../PasswordInput.jsx';
@@ -40,6 +41,7 @@ export default function Account() {
             <code>passwd</code> in the terminal.</p>
         </div>
         <AvatarSettings />
+        <ApiTokens />
       </>
     );
   }
@@ -62,6 +64,7 @@ export default function Account() {
         <button type="submit">Change password</button>
       </form>
       <AvatarSettings />
+      <ApiTokens />
     </>
   );
 }

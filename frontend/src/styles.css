@@ -197,3 +197,15 @@ textarea.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size
   .field-rows { grid-template-columns: 1fr 1fr; }
   .field-rows > span { display: none; }
 }
+
+/* Account → personal access tokens. */
+.tokens-card { max-width: 680px; margin: 40px auto; display: flex; flex-direction: column; gap: 12px; }
+.tokens-card h3 { margin: 0; font-size: 1rem; }
+.token-form { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 12px; }
+.token-created {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: 1px solid var(--success); border-radius: var(--radius);
+}
+.token-created pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+.small { font-size: 0.8rem; }

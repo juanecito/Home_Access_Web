@@ -23,6 +23,8 @@ flowchart TB
     I --> CFG["config.py<br/>Config (env vars)"]
     I --> DBM["db.py<br/>get_db(), init_db(), _migrate()"]
     I --> AUTH["auth.py<br/>/api/auth/*<br/>require_auth()"]
+    I --> PAT["api_tokens.py<br/>/api/auth/tokens"]
+    PAT --> AUTH
     I --> ITEMS["items.py<br/>/api/items"]
     I --> TYPES["item_types.py<br/>/api/item-types"]
     I --> USERS["users.py<br/>/api/users"]
@@ -52,6 +54,7 @@ flowchart TB
 | `app/db.py` | One SQLite connection per request (`flask.g`), schema creation, in-place migrations |
 | `app/schema.sql` | `CREATE TABLE IF NOT EXISTS …` for all static tables |
 | `app/auth.py` | Validation, password hashing, JWT issue/verify, cookies, CSRF, `require_auth` decorator, throttling, PAM sync, `/api/auth/*` routes, avatars |
+| `app/api_tokens.py` | Personal access tokens: list, create (re-authentication), delete |
 | `app/items.py` | Items CRUD with search, type filter, pagination, ownership checks |
 | `app/item_types.py` | Admin-defined item types; creates/alters one SQL table per type |
 | `app/users.py` | Admin user management |
@@ -154,7 +157,7 @@ loaded by systemd's `EnvironmentFile=`).
 | `HOMEACCES_DATABASE` | `backend/instance/homeacces.sqlite3` | SQLite file path |
 | `HOMEACCES_ACCESS_TTL_MIN` | `15` | Access token lifetime (minutes) |
 | `HOMEACCES_REFRESH_TTL_DAYS` | `7` | Refresh token lifetime (days) |
-| `HOMEACCES_AUTH_LOG_LEVEL` | `INFO` | Level of the token log `homeacces.auth` on stderr (see [4.11](04-authentication.md#411-token-log)); `DEBUG` adds one line per authenticated request, `WARNING` keeps only failures |
+| `HOMEACCES_AUTH_LOG_LEVEL` | `INFO` | Level of the token log `homeacces.auth` on stderr (see [4.12](04-authentication.md#412-token-log)); `DEBUG` adds one line per authenticated request, `WARNING` keeps only failures |
 | `HOMEACCES_COOKIE_SECURE` | `1` | `Secure` flag on cookies (set `0` only for plain-HTTP dev) |
 | `HOMEACCES_ALLOW_REGISTRATION` | `0` | Initial value for self-registration (admins can override in UI) |
 | `HOMEACCES_ACTIVITY_LOG` | `backend/instance/activity.log` | Activity text file (`""` = DB only) |
@@ -195,9 +198,23 @@ Legend: 🌐 public · 🔑 signed in · 👑 admin only · 🖥️ PAM session 
 | POST | `/refresh` | refresh cookie + CSRF | → `{user, session}` + new cookies |
 | POST | `/logout` | 🌐 | → `{ok: true}`, revokes the whole session (its access tokens stop working at once), clears cookies |
 | GET | `/me` | 🔑 | → `{user, session: {method}}` |
-| PUT | `/password` | 🔑 local only | `{current_password, new_password}` → `{ok}`, other sessions and bearer tokens revoked; 5 wrong current passwords / 15 min → 429 |
+| PUT | `/password` | 🔑 local only, no personal access token | `{current_password, new_password}` → `{ok}`, other sessions, bearer tokens and personal access tokens revoked; 5 wrong current passwords / 15 min → 429 |
 | PUT | `/avatar` | 🔑 | `{avatar: "data:image/png;base64,…"}` (60×60 PNG/JPEG, ≤ 32 KB) → `{user}` |
 | DELETE | `/avatar` | 🔑 | → `{user}` |
+
+### Personal access tokens — `api_tokens.py`, prefix `/api/auth/tokens`
+
+All three need a signed-in browser session (or a `/token` JWT); a personal access token gets 403.
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/api/auth/tokens` | → `{tokens: [{id, name, hint, created_at, expires_at, expired, last_used_at, last_used_ip}], max_tokens}` (own tokens only) |
+| POST | `/api/auth/tokens` | `{name, expires_in_days: 1–365 \| null, password}` → 201 `{token, secret}`; the `secret` (`hat_…`) is returned only here. 400 wrong password (5 / 15 min → 429) or 20 tokens reached, 409 duplicate name |
+| DELETE | `/api/auth/tokens/<id>` | → 204; 404 for another user's token |
+
+Any 🔑 endpoint accepts `Authorization: Bearer hat_…`, except the token endpoints above,
+`PUT /api/auth/password`, `POST /api/terminal/ticket` and `POST /api/ssh/ticket`. `GET /api/auth/me`
+reports `session: {method: "token"}`.
 
 ### Items — `items.py`, prefix `/api/items` (🔑; users see their own, admins see all)
 
@@ -228,7 +245,7 @@ Item object: `id, owner_id, owner, title, description, done, type_id, type_name,
 | GET | `` | → `{users: [... , last_login]}` |
 | GET | `/<id>` | → `{user}` |
 | POST | `` | `{username, password, role}` → 201 |
-| PUT | `/<id>` | `{username?, role?, password?}` (local accounts only; cannot demote last admin) |
+| PUT | `/<id>` | `{username?, role?, password?}` (local accounts only; cannot demote last admin; a new password revokes sessions and personal access tokens) |
 | DELETE | `/<id>` | → 204 (not yourself; cascades to their items) |
 
 ### Admin — `admin.py`, prefix `/api/admin` (👑)
@@ -468,9 +485,10 @@ never be read as options.
 
 ## 2.11 Tests
 
-`backend/tests/` (pytest, 60 tests) covers: health, register/login/logout, validation, CSRF,
+`backend/tests/` (pytest) covers: health, register/login/logout, validation, CSRF,
 items CRUD and isolation, bearer tokens, refresh rotation, reuse detection and the grace period,
-instant revocation of access and bearer tokens, login and password-change throttling,
+instant revocation of access and bearer tokens, personal access tokens (scope, expiry, revocation,
+privacy, PAM re-check), login and password-change throttling,
 password change, user admin, registration toggle, activity log, PAM login/refresh/role sync
 (with a fake helper), terminal tickets, schema migration, avatars, item types, the helper's
 socket protocol, terminal sessions and handshake limit, and the SSH menu (`test_ssh.py` and

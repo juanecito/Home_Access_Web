@@ -196,7 +196,7 @@ def forget_host_key(profile_id):
 # ---------------------------------------------------------------- tickets
 
 @bp.post("/ticket")
-@require_auth()
+@require_auth(allow_api_token=False)
 def ticket():
     if not settings.ssh_enabled():
         abort(403, "the SSH terminal is disabled by an administrator")

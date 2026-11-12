@@ -12,10 +12,13 @@ that value in the `X-CSRF-Token` header; it is checked against the `csrf` claim 
 the JWT, so a forged cookie cannot be used.
 
 Non-browser clients (scripts, curl) can call POST /api/auth/token and send
-`Authorization: Bearer <token>`; CSRF does not apply to them.
+`Authorization: Bearer <token>`; CSRF does not apply to them. They can also use a personal
+access token (`hat_…`, see app/api_tokens.py) the user created on the Account page: an opaque,
+long-lived secret checked against the `api_tokens` table instead of a JWT.
 """
 import base64
 import binascii
+import hashlib
 import hmac
 import logging
 import pwd
@@ -43,6 +46,11 @@ CSRF_HEADER = "X-CSRF-Token"
 REFRESH_COOKIE_PATH = "/api/auth"
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 METHODS = ("local", "pam")
+# Personal access tokens start with this prefix, so they are told apart from JWTs at a glance
+# (and by secret scanners). The `amr` of a request authenticated by one is "token".
+API_TOKEN_PREFIX = "hat_"
+API_TOKEN_AMR = "token"
+API_TOKEN_TOUCH_SECONDS = 60  # last_used_at is written at most this often per token
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 PAM_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
@@ -287,8 +295,92 @@ def _load_user(user_id):
     return get_db().execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
-def require_auth(roles=None):
-    """Protect a view. Sets g.user (user row) and g.claims (access token claims)."""
+def hash_api_token(secret):
+    return hashlib.sha256(secret.encode("utf-8", "replace")).hexdigest()
+
+
+def revoke_api_tokens(user_id, reason):
+    """Delete all personal access tokens of a user (password change, password reset)."""
+    db = get_db()
+    deleted = db.execute("DELETE FROM api_tokens WHERE user_id = ?", (user_id,)).rowcount
+    db.commit()
+    if deleted:
+        authlog.event("api_token.revoke_all", user_id=user_id, tokens_revoked=deleted, reason=reason)
+    return deleted
+
+
+def _verify_api_token(secret, via):
+    """Check a personal access token. Returns (user row, pseudo-claims) or aborts with 401."""
+    db = get_db()
+    row = db.execute("SELECT * FROM api_tokens WHERE token_hash = ?", (hash_api_token(secret),)).fetchone()
+    claims = {"type": "api_token", "amr": API_TOKEN_AMR}
+
+    def reject(reason, error="invalid_token", level=logging.INFO):
+        authlog.event("token.rejected", claims=claims, token=secret, via=via, level=level,
+                      expected="api_token", reason=reason)
+        abort(401, error)
+
+    if row is None:
+        reject("unknown or revoked personal access token", level=logging.WARNING)
+    claims.update(sub=str(row["user_id"]), pat_id=row["id"])
+    now = int(time.time())
+    if row["expires_at"] is not None and row["expires_at"] <= now:
+        reject("expired", error="token_expired")
+    user = _load_user(row["user_id"])
+    if user is None:
+        reject("user no longer exists", level=logging.WARNING)
+
+    updates = {}
+    if user["auth_source"] == "pam":
+        # Like a browser session at each refresh: a locked, expired or removed system account
+        # loses API access within one access-token lifetime, and the role follows the groups.
+        if not current_app.config["PAM_ENABLED"]:
+            reject("PAM login is disabled")
+        recheck = int(current_app.config["ACCESS_TOKEN_TTL"].total_seconds())
+        if row["checked_at"] is None or now - row["checked_at"] >= recheck:
+            reply = privd.call("pam_account", username=user["username"])
+            if not reply.get("ok"):
+                reject("system account no longer allowed", level=logging.WARNING)
+            user = _sync_pam_user(user["username"], reply.get("groups", []))
+            updates["checked_at"] = now
+    if row["last_used_at"] is None or now - row["last_used_at"] >= API_TOKEN_TOUCH_SECONDS \
+            or row["last_used_ip"] != request.remote_addr:
+        updates.update(last_used_at=now, last_used_ip=request.remote_addr)
+    if updates:
+        db.execute(f"UPDATE api_tokens SET {', '.join(f'{k} = ?' for k in updates)} WHERE id = ?",
+                   (*updates.values(), row["id"]))
+        db.commit()
+    claims["role"] = user["role"]
+    return user, claims
+
+
+def _verify_jwt_access(token, from_cookie, via):
+    """Check a JWT access token (cookie or bearer). Returns (user row, claims) or aborts."""
+    claims = _decode(token, "access")
+    if from_cookie and request.method not in SAFE_METHODS:
+        _check_csrf(claims)
+    # Logout, password changes and theft detection revoke the session: its access
+    # tokens stop working at once instead of at expiry. (Tokens issued before
+    # sessions existed carry no sid and simply run out.)
+    if claims.get("sid") is not None and not _session_active(claims["sid"]):
+        authlog.event("token.rejected", claims=claims, token=token, via=via,
+                      reason="session revoked or expired")
+        abort(401, "invalid_token")
+
+    user = _load_user(int(claims["sub"]))
+    if user is None:
+        authlog.event("token.rejected", claims=claims, token=token, via=via,
+                      level=logging.WARNING, reason="user no longer exists")
+        abort(401, "invalid_token")
+    return user, claims
+
+
+def require_auth(roles=None, allow_api_token=True):
+    """Protect a view. Sets g.user (user row) and g.claims (access token claims).
+
+    `allow_api_token=False` refuses personal access tokens: for managing the tokens themselves,
+    changing the password and opening terminals, which need a real sign-in.
+    """
     def decorator(view):
         @wraps(view)
         def wrapped(*args, **kwargs):
@@ -302,22 +394,14 @@ def require_auth(roles=None):
                 authlog.event("token.missing", level=logging.DEBUG)
                 abort(401, "authentication_required")
 
-            claims = _decode(token, "access")
-            if from_cookie and request.method not in SAFE_METHODS:
-                _check_csrf(claims)
-            # Logout, password changes and theft detection revoke the session: its access
-            # tokens stop working at once instead of at expiry. (Tokens issued before
-            # sessions existed carry no sid and simply run out.)
-            if claims.get("sid") is not None and not _session_active(claims["sid"]):
-                authlog.event("token.rejected", claims=claims, token=token, via=via,
-                              reason="session revoked or expired")
-                abort(401, "invalid_token")
-
-            user = _load_user(int(claims["sub"]))
-            if user is None:
-                authlog.event("token.rejected", claims=claims, token=token, via=via,
-                              level=logging.WARNING, reason="user no longer exists")
-                abort(401, "invalid_token")
+            if not from_cookie and token.startswith(API_TOKEN_PREFIX):
+                user, claims = _verify_api_token(token, via)
+                if not allow_api_token:
+                    authlog.event("access.forbidden", claims=claims, user=user, level=logging.WARNING,
+                                  reason="personal access tokens are not accepted here")
+                    abort(403, "this action requires signing in; personal access tokens are not accepted")
+            else:
+                user, claims = _verify_jwt_access(token, from_cookie, via)
             if roles and user["role"] not in roles:
                 authlog.event("access.forbidden", claims=claims, user=user, level=logging.WARNING,
                               required=",".join(roles), actual_role=user["role"])
@@ -572,7 +656,7 @@ def me():
 
 
 @bp.put("/password")
-@require_auth()
+@require_auth(allow_api_token=False)
 def change_password():
     if g.user["auth_source"] != "local":
         abort(400, "system accounts change their password on the system (passwd)")
@@ -594,6 +678,7 @@ def change_password():
     db.execute("DELETE FROM login_failures WHERE key = ?", (key,))
     db.commit()
     revoke_all_refresh_tokens(g.user["id"], reason="password change")
+    revoke_api_tokens(g.user["id"], reason="password change")
     record("auth.password_change")
     # Re-issue cookies for this session so the user stays logged in here only.
     return set_auth_cookies(jsonify(ok=True), g.user, "local")

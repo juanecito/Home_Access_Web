@@ -24,6 +24,7 @@ deployment — with diagrams) is in [`doc/`](doc/README.md).
 backend/            Flask API
   app/__init__.py     app factory, error handling, CLI (init-db, create-admin)
   app/auth.py         passwords, JWT, cookies, CSRF, /api/auth/*
+  app/api_tokens.py   /api/auth/tokens: personal access tokens for scripts
   app/items.py        /api/items CRUD
   app/item_types.py   /api/item-types: user-defined item types, one table per type
   app/users.py        /api/users admin CRUD
@@ -184,8 +185,11 @@ All bodies are JSON. Errors look like `{"error": "...", "status": 4xx}`.
 | POST | `/api/auth/refresh` | – | Rotates the refresh token, new access token |
 | POST | `/api/auth/logout` | – | Revokes the refresh token, clears cookies |
 | GET | `/api/auth/me` | – | Current user |
-| PUT | `/api/auth/password` | `current_password`, `new_password` | Signs out other sessions and bearer tokens; 5 wrong current passwords in 15 min → 429 |
+| PUT | `/api/auth/password` | `current_password`, `new_password` | Signs out other sessions and bearer tokens, deletes personal access tokens; 5 wrong current passwords in 15 min → 429 |
 | POST | `/api/auth/token` | `username`, `password`, `method` | For scripts: returns `access_token` (Bearer), no cookies |
+| GET | `/api/auth/tokens` | – | Your personal access tokens (never the secrets) |
+| POST | `/api/auth/tokens` | `name`, `expires_in_days` (1–365 or `null`), `password` | Creates a personal access token; the `secret` is returned only once |
+| DELETE | `/api/auth/tokens/<id>` | – | Revokes one of your tokens |
 
 **Browser (cookies):** login sets `access_token` (HttpOnly, 15 min), `refresh_token` (HttpOnly,
 7 days, path `/api/auth`) and `csrf_token` (readable). Every POST/PUT/DELETE must send the
@@ -198,6 +202,12 @@ TOKEN=$(curl -sk https://server.local/api/auth/token -H 'Content-Type: applicati
   -d '{"username":"admin","password":"..."}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
 curl -sk https://server.local/api/items -H "Authorization: Bearer $TOKEN"
 ```
+
+**Personal access tokens:** for unattended scripts, create a token in **Account → Personal access
+tokens** (name, expiry, your password) and send it the same way:
+`curl -sk https://server.local/api/items -H "Authorization: Bearer hat_…"`. It acts as you with your
+current role, but cannot manage tokens, change your password or open terminals. Only its SHA-256 is
+stored; changing your password deletes all your tokens.
 
 ### Items — users see their own, admins see all
 
@@ -231,7 +241,7 @@ Field types: `int`, `float`, `boolean`, `string`. Field names: lowercase letters
 | GET | `/api/users` | – |
 | GET | `/api/users/<id>` | – |
 | POST | `/api/users` | `username`, `password`, `role` (`user`/`admin`) |
-| PUT | `/api/users/<id>` | `username`, `role` and/or `password` (all optional; local accounts only) |
+| PUT | `/api/users/<id>` | `username`, `role` and/or `password` (all optional; local accounts only). A new password signs the user out and deletes their personal access tokens |
 | DELETE | `/api/users/<id>` | – → 204 (cannot delete yourself; deletes their items) |
 
 `GET /api/users` also returns `last_login` (from the activity log) for each user.
@@ -245,7 +255,8 @@ Field types: `int`, `float`, `boolean`, `string`. Field names: lowercase letters
 | GET | `/api/admin/activity` | `?user=&event=&result=success\|failure&limit=50&offset=0` → `{entries, total, events}`. `event` is exact (`auth.login`) or a prefix ending in `.` (`auth.`) |
 
 Recorded events: `auth.login` (success and failure, with `method`, `client` and `reason`), `auth.logout`,
-`auth.register`, `auth.password_change`, `auth.token_reuse`, `auth.session_revoked`, `terminal.open`,
+`auth.register`, `auth.password_change`, `auth.token_reuse`, `auth.session_revoked`, `auth.token_create`,
+`auth.token_revoke`, `terminal.open`,
 `user.create` / `user.update` / `user.delete`, `settings.update`, `item.create` / `item.update` /
 `item.delete`, `item_type.create` / `item_type.update` / `item_type.delete`, `ssh.profile_create` /
 `ssh.profile_update` / `ssh.profile_delete`, `ssh.host_key_forget`, `ssh.open`. Each entry is also appended to `HOMEACCES_ACTIVITY_LOG` as one line, e.g.:
@@ -332,6 +343,9 @@ The private key is write-only: the API only reports `has_key`. SSH sessions clos
 - Login throttling: 5 failures per IP+username in 15 minutes (app), plus 10 req/min per IP on
   login, register, token and password change (nginx). Wrong current passwords on password change are
   throttled per account too.
+- Personal access tokens are stored as SHA-256 hashes, can expire, and need the current password to
+  be created; they cannot open terminals, manage tokens or change the password, and a password change
+  deletes them.
 - Self-registration is off by default. When it is on, a system username is reported as "username
   already taken", so registration cannot be used to list the server's accounts.
 - gunicorn listens on the Unix socket `/run/homeacces-api.sock` (from `homeacces.socket`), which only

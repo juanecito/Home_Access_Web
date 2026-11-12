@@ -32,11 +32,12 @@ frontend/
     ├── styles.css           all styles
     ├── Avatar.jsx           <img> with default silhouette
     ├── AvatarSettings.jsx   upload → crop/resize to 60×60 in a <canvas>
+    ├── ApiTokens.jsx        personal access tokens: list, create (secret shown once), delete
     ├── PasswordInput.jsx    password field with show/hide button
     ├── TerminalView.jsx     reusable xterm.js ↔ WebSocket terminal (local and SSH)
     └── pages/
         ├── Login.jsx        sign in (local / system account) and register
-        ├── Account.jsx      password change + avatar
+        ├── Account.jsx      password change + avatar + personal access tokens
         ├── Terminal.jsx     local shell: TerminalView on /api/terminal/ws
         ├── ssh/
         │   ├── SshSection.jsx     tab bar (Connections + one tab per session), routes, destination()
@@ -216,6 +217,9 @@ Local accounts: change password (other sessions are signed out; after 5 wrong cu
 the API answers 429 for 15 minutes). PAM accounts: an explanation
 that the password is changed with `passwd`. Both: `AvatarSettings` — the image is cropped to a
 centred square and scaled to 60×60 **in the browser** (`<canvas>`), then sent as a data URL.
+Both: `ApiTokens` — lists the user's personal access tokens (hint, expiry, last use) and creates new
+ones (name, expiry, current password). The new secret is shown once, with a copy button and a `curl`
+example, and is kept only in component state until the user clicks Done.
 
 ### SSH (`pages/ssh/*`)
 

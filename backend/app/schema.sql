@@ -24,6 +24,22 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
 
+-- Personal access tokens: long-lived API credentials a user creates for scripts, sent as
+-- `Authorization: Bearer hat_…`. Only the SHA-256 of the token is stored; deleting the row revokes it.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT    NOT NULL,
+    token_hash   TEXT    NOT NULL UNIQUE,   -- hex SHA-256 of the whole token
+    hint         TEXT    NOT NULL,          -- first characters of the token, to recognise it
+    created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    expires_at   INTEGER,                   -- unix time; NULL = never expires
+    last_used_at INTEGER,                   -- unix time, updated at most once a minute
+    last_used_ip TEXT,
+    checked_at   INTEGER,                   -- last system-account check (PAM users only)
+    UNIQUE (user_id, name)
+);
+
 -- Failed login attempts, used for brute-force throttling (shared by all workers).
 CREATE TABLE IF NOT EXISTS login_failures (
     id  INTEGER PRIMARY KEY AUTOINCREMENT,

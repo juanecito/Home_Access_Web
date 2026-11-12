@@ -2,7 +2,7 @@
 
 [← Database](03-database.md) · [Index](README.md) · Next: [Frontend →](05-frontend.md)
 
-Code: `backend/app/auth.py`, `backend/app/terminal.py`, `backend/app/ssh.py`, `backend/app/privd.py`,
+Code: `backend/app/auth.py`, `backend/app/api_tokens.py`, `backend/app/terminal.py`, `backend/app/ssh.py`, `backend/app/privd.py`,
 `backend/homeacces_privd/`, `backend/homeacces_ssh/`, `backend/webterm.py`, `frontend/src/api.js`,
 `frontend/src/AuthContext.jsx`.
 
@@ -17,11 +17,13 @@ flowchart LR
     subgraph Clients["Client types"]
         BR["Browser<br/>POST /api/auth/login<br/>→ HttpOnly cookies + CSRF"]
         SC["Script<br/>POST /api/auth/token<br/>→ Bearer token in body"]
+        PAT["Script<br/>personal access token hat_…<br/>(created on the Account page)"]
     end
     L --> BR & SC
     P --> BR & SC
     BR --> AMR["JWT claim amr = 'local' | 'pam'"]
     SC --> AMR
+    PAT --> AMRT["amr = 'token'<br/>no terminals, no token or<br/>password management"]
     AMR --> T{"amr == 'pam'?"}
     T -- yes --> TERM["Web terminal allowed"]
     T -- no --> NOTERM["No terminal"]
@@ -39,6 +41,7 @@ flowchart LR
 | Cookie flags | `HttpOnly` (except CSRF), `Secure`, `SameSite=Strict` |
 | Brute force | App: 5 failures / 15 min per IP+method+username → 429, and 5 wrong current passwords / 15 min per account on password change. nginx: 10 req/min per IP on login/register/token/password |
 | Roles | `user`, `admin` — checked by `require_auth(roles)` on every request from the DB row (not from the token) |
+| Personal access tokens | Opaque `hat_…` secrets (256 bits) a user creates for scripts; only their SHA-256 is stored, see §4.10 |
 
 ## 4.2 Tokens
 
@@ -361,9 +364,57 @@ curl -sk https://server.local/api/items -H "Authorization: Bearer $TOKEN"
 
 `/api/auth/token` returns only an access token (no refresh token); request a new one after
 `expires_in` seconds. No CSRF header is needed for Bearer requests. A password change or
-"revoke all" (token reuse) invalidates bearer tokens immediately.
+"revoke all" (token reuse) invalidates bearer tokens immediately. For scripts that run unattended,
+a personal access token (§4.10) avoids storing the account password.
 
-## 4.10 Defence in depth
+## 4.10 Personal access tokens
+
+Each user can create long-lived tokens for scripts on the **Account** page
+(`POST /api/auth/tokens`, code in `backend/app/api_tokens.py`), and use them as Bearer tokens:
+
+```bash
+curl -sk https://server.local/api/items -H "Authorization: Bearer hat_Q2xv9A…"
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as Script
+    participant A as Flask require_auth
+    participant D as SQLite
+    participant P as homeacces-privd
+
+    S->>A: GET /api/items  Authorization: Bearer hat_…
+    A->>D: SELECT api_tokens WHERE token_hash = sha256(token)
+    alt unknown / deleted
+        A-->>S: 401 invalid_token
+    else expires_at passed
+        A-->>S: 401 token_expired
+    end
+    opt owner is a PAM user and last check ≥ 15 min ago
+        A->>P: {"op":"pam_account","username":…}
+        alt account locked / expired / removed from group
+            A-->>S: 401 invalid_token
+        else ok
+            A->>D: sync role from groups, checked_at = now
+        end
+    end
+    A->>D: last_used_at / last_used_ip (at most once a minute)
+    A->>A: role check on the users row, g.claims = {type:"api_token", amr:"token", pat_id}
+    A-->>S: 200
+```
+
+| Property | Implementation |
+|---|---|
+| Format | `hat_` + `secrets.token_urlsafe(32)` (256 bits). The prefix tells it apart from a JWT and makes leaked tokens easy to grep for |
+| Storage | Only the hex SHA-256 (`api_tokens.token_hash`) and a hint (`hat_` + 6 characters). The secret is returned once, by the create call |
+| Lifetime | 1–365 days, or no expiry (`expires_in_days: null`); the UI defaults to 90 days |
+| Creation | Needs a browser session (CSRF) **and the current password** (system password through PAM for PAM users), throttled 5 failures / 15 min per account, so a stolen session cannot quietly mint a lasting credential. At most 20 tokens per user, names unique per user |
+| Scope | Acts as the owner with the owner's *current* role. Refused with 403 by `require_auth(allow_api_token=False)` on: token management, password change, terminal and SSH tickets |
+| Revocation | Deleting a token (Account page) ends it at once. A password change by the user or an admin deletes all of the user's tokens; deleting the user deletes them (cascade). PAM accounts are re-checked every 15 min (`HOMEACCES_ACCESS_TTL_MIN`) |
+| CSRF | Not applicable: a token is only accepted from the `Authorization` header, never from a cookie |
+
+## 4.11 Defence in depth
 
 ```mermaid
 flowchart TB
@@ -408,7 +459,7 @@ To disable the PAM/terminal feature entirely: set `HOMEACCES_PAM_ENABLED=0` and 
 Settings (or `HOMEACCES_SSH_ENABLED=0` before an admin changed it) and run
 `sudo systemctl disable --now homeacces-ssh`.
 
-## 4.11 Token log
+## 4.12 Token log
 
 Besides the activity log (what users did), the API writes a diagnostic log of what happened to
 their **tokens** (`backend/app/authlog.py`, logger `homeacces.auth`, stderr → journald):
@@ -429,7 +480,7 @@ INFO homeacces.auth: event=token.issued type="access" user_id=3 role="user" amr=
 | `ticket.issued` | INFO | Terminal or SSH ticket created, with the `sid` of the session that asked for it |
 | `token.verified` | DEBUG | Access token accepted by `require_auth`; `via` = `cookie` or `bearer` |
 | `token.missing` | DEBUG | Protected endpoint called without a token |
-| `token.rejected` | INFO / WARNING | `reason`: `expired` (INFO, routine), invalid signature or format, wrong type, session revoked, user deleted, refresh `jti` unknown |
+| `token.rejected` | INFO / WARNING | `reason`: `expired` (INFO, routine), invalid signature or format, wrong type, session revoked, user deleted, refresh `jti` unknown, unknown or revoked personal access token, system account no longer allowed |
 | `csrf.failed` | WARNING | Header missing or not matching the token's `csrf` claim |
 | `access.forbidden` | WARNING | Valid token, but the user's role is not allowed |
 | `refresh.rotated` | INFO | Refresh token exchanged for a new pair (same `sid`) |
@@ -437,12 +488,16 @@ INFO homeacces.auth: event=token.issued type="access" user_id=3 role="user" amr=
 | `refresh.reuse_detected` | WARNING | Rotated/revoked refresh token replayed: all of the user's sessions are revoked |
 | `session.revoke_all` | INFO / WARNING | All sessions of a user revoked, with `reason` and `tokens_revoked` |
 | `session.logout` | INFO | Session ended by logout, with `tokens_revoked` |
+| `api_token.created` | INFO | Personal access token created, with `pat_id`, `fp` and `expires` |
+| `api_token.revoked` | INFO | Personal access token deleted by its owner |
+| `api_token.revoke_all` | INFO | All personal access tokens of a user deleted (password change or reset), with `tokens_revoked` |
 
 **Never logged:** the token string, its signature, the CSRF value or any password. A token is
 identified by its `jti` and `fp` (first 12 hex digits of the SHA-256 of the whole token), so a
 token seen in a browser or script can be matched against the log (`printf %s "$TOKEN" | sha256sum`)
-without the log becoming a source of usable credentials. For rejected tokens whose signature could
-not be verified the claims are shown with `claims_verified=false`: they may be forged.
+without the log becoming a source of usable credentials. For a personal access token, `fp` is also
+the start of its `api_tokens.token_hash`. For rejected tokens whose signature could not be verified
+the claims are shown with `claims_verified=false`: they may be forged.
 
 Set `HOMEACCES_AUTH_LOG_LEVEL` to `DEBUG` to trace every authenticated request, or `WARNING` to
 keep only failures. The terminal services (`homeacces-privd`, `homeacces-ssh`) log each ticket they

@@ -20,6 +20,7 @@ user under `HOMEACCES_SSH_DIR` (default `ssh/` next to the database, see §3.2 `
 erDiagram
     users ||--o{ items : "owns (CASCADE)"
     users ||--o{ refresh_tokens : "has (CASCADE)"
+    users ||--o{ api_tokens : "has (CASCADE)"
     users ||--o{ ssh_profiles : "owns (CASCADE)"
     users |o--o{ activity_log : "acts (SET NULL)"
     item_types ||--o{ item_type_fields : "defines (CASCADE)"
@@ -43,6 +44,18 @@ erDiagram
         INTEGER expires_at "unix time"
         INTEGER revoked "0 active, 1 revoked, 2 rotated"
         INTEGER rotated_at "unix time"
+    }
+    api_tokens {
+        INTEGER id PK
+        INTEGER user_id FK
+        TEXT name "UNIQUE per user"
+        TEXT token_hash UK "hex SHA-256"
+        TEXT hint "hat_ + 6 chars"
+        TEXT created_at
+        INTEGER expires_at "unix time or NULL"
+        INTEGER last_used_at "unix time"
+        TEXT last_used_ip
+        INTEGER checked_at "PAM re-check"
     }
     login_failures {
         INTEGER id PK
@@ -138,11 +151,25 @@ requests (in any gunicorn worker) exactly one rotates the token. `POST /api/auth
 creates a row (never sent to the client) so bearer tokens can be revoked. Expired rows are
 deleted opportunistically on failed logins.
 
+### `api_tokens`
+
+Personal access tokens (see [Authentication §4.10](04-authentication.md#410-personal-access-tokens)).
+The token itself is never stored: `token_hash` is the hex SHA-256 of the whole `hat_…` string and is
+what `require_auth` looks up. `hint` keeps the first characters so users can recognise a token in the
+list. Revoking a token deletes its row; a password change or reset deletes all rows of the user.
+
+| Column | Notes |
+|---|---|
+| `expires_at` | Unix time; `NULL` = never expires. Expired rows are kept (shown as expired) until the user deletes them |
+| `last_used_at`, `last_used_ip` | Written at most once a minute per token (or when the IP changes), to avoid a write per request |
+| `checked_at` | Last `pam_account` check of the owner (PAM users only); repeated after one access-token lifetime |
+
 ### `login_failures`
 
 Sliding-window brute-force counter shared by all gunicorn workers. Key formats:
 `<client ip>|<method>:<username>` (lower-cased) for logins, `pwchange:<user id>` for wrong
-current passwords on password change. Rows older than the window are deleted
+current passwords on password change, `reauth:<user id>` for wrong passwords when creating a
+personal access token. Rows older than the window are deleted
 whenever a new failure is recorded; a successful login clears the key.
 
 ### `items`

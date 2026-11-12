@@ -27,7 +27,7 @@ log = logging.getLogger("homeacces.auth")
 # Claims that are safe and useful to log. "csrf" is deliberately absent.
 MAX_VALUE = 120
 
-SAFE_CLAIMS = ("type", "sub", "role", "amr", "sid", "jti", "pam_user", "profile_id", "iat", "exp")
+SAFE_CLAIMS = ("type", "sub", "role", "amr", "sid", "jti", "pat_id", "pam_user", "profile_id", "iat", "exp")
 
 
 def setup(app):

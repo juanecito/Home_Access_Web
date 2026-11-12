@@ -752,3 +752,135 @@ def test_ssh_forget_host_key(app):
     login(admin, "admin", "adminpass123")
     assert admin.delete(f"/api/users/{alice_id}", headers=csrf(admin)).status_code == 204
     assert not os.path.exists(path)
+
+
+# ---------------------------------------------------------------- personal access tokens
+
+def create_pat(client, name="script", password="alicepass123", **extra):
+    return client.post("/api/auth/tokens", json={"name": name, "password": password, **extra},
+                       headers=csrf(client))
+
+
+def bearer(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_personal_access_token_lifecycle(app, client):
+    register(client)
+    r = create_pat(client, expires_in_days=30)
+    assert r.status_code == 201
+    secret, token = r.json["secret"], r.json["token"]
+    assert secret.startswith("hat_") and token["hint"] == secret[:10]
+    assert token["expires_at"] and token["last_used_at"] is None
+
+    # Only a hash is stored.
+    with app.app_context():
+        stored = get_db().execute("SELECT * FROM api_tokens").fetchone()
+        assert secret not in tuple(str(v) for v in stored)
+
+    script = app.test_client()
+    r = script.post("/api/items", json={"title": "via token"}, headers=bearer(secret))  # no CSRF needed
+    assert r.status_code == 201
+    me = script.get("/api/auth/me", headers=bearer(secret)).json
+    assert me["user"]["username"] == "alice" and me["session"] == {"method": "token"}
+    listed = client.get("/api/auth/tokens").json["tokens"]
+    assert [t["name"] for t in listed] == ["script"] and listed[0]["last_used_at"]
+    assert "secret" not in listed[0]
+
+    assert client.delete(f"/api/auth/tokens/{token['id']}", headers=csrf(client)).status_code == 204
+    assert script.get("/api/items", headers=bearer(secret)).status_code == 401
+
+
+def test_personal_access_token_validation(client):
+    register(client)
+    assert create_pat(client, password="wrong-password").status_code == 400
+    assert create_pat(client, name="  ").status_code == 400
+    assert create_pat(client, name="x" * 65).status_code == 400
+    assert create_pat(client, expires_in_days=0).status_code == 400
+    assert create_pat(client, expires_in_days=366).status_code == 400
+    assert create_pat(client, expires_in_days="30").status_code == 400
+    assert create_pat(client, expires_in_days=None).json["token"]["expires_at"] is None
+    assert create_pat(client).status_code == 409  # same name
+    # Managing tokens needs a CSRF-protected browser session.
+    assert client.post("/api/auth/tokens", json={"name": "a", "password": "alicepass123"}).status_code == 403
+
+
+def test_personal_access_token_password_throttled(client):
+    register(client)
+    for _ in range(5):
+        assert create_pat(client, password="wrong-password").status_code == 400
+    assert create_pat(client).status_code == 429
+
+
+def test_personal_access_token_limits_what_it_can_do(app, client):
+    register(client)
+    secret = create_pat(client).json["secret"]
+    h = bearer(secret)
+    assert client.get("/api/auth/tokens", headers=h).status_code == 403
+    assert client.post("/api/auth/tokens", json={"name": "b", "password": "alicepass123"}, headers=h).status_code == 403
+    assert client.put("/api/auth/password", json={"current_password": "alicepass123", "new_password": "x" * 10},
+                      headers=h).status_code == 403
+    assert client.post("/api/ssh/ticket", json={"profile_id": 1}, headers=h).status_code == 403
+    # Role comes from the user row: a plain user's token cannot reach admin endpoints.
+    assert client.get("/api/users", headers=h).status_code == 403
+
+
+def test_personal_access_token_rejections(app, client):
+    register(client)
+    assert client.get("/api/items", headers=bearer("hat_doesnotexist")).status_code == 401
+    secret = create_pat(client, expires_in_days=1).json["secret"]
+    with app.app_context():
+        get_db().execute("UPDATE api_tokens SET expires_at = 1")
+        get_db().commit()
+    r = client.get("/api/items", headers=bearer(secret))
+    assert r.status_code == 401 and r.json["error"] == "token_expired"
+    assert client.get("/api/auth/tokens").json["tokens"][0]["expired"] is True
+
+
+def test_personal_access_tokens_revoked_by_password_change(app, client):
+    register(client)
+    secret = create_pat(client).json["secret"]
+    r = client.put("/api/auth/password", json={"current_password": "alicepass123", "new_password": "newpass1234"},
+                   headers=csrf(client))
+    assert r.status_code == 200
+    assert client.get("/api/items", headers=bearer(secret)).status_code == 401
+    assert client.get("/api/auth/tokens").json["tokens"] == []
+
+    secret = create_pat(client, password="newpass1234").json["secret"]
+    admin = app.test_client()
+    login(admin, "admin", "adminpass123")
+    alice_id = client.get("/api/auth/me").json["user"]["id"]
+    admin.put(f"/api/users/{alice_id}", json={"password": "resetpass123"}, headers=csrf(admin))
+    assert app.test_client().get("/api/items", headers=bearer(secret)).status_code == 401
+
+
+def test_personal_access_tokens_are_private(app):
+    alice, bob = app.test_client(), app.test_client()
+    register(alice, "alice")
+    register(bob, "bob", "bobpass1234")
+    token_id = create_pat(alice).json["token"]["id"]
+    assert bob.get("/api/auth/tokens").json["tokens"] == []
+    assert bob.delete(f"/api/auth/tokens/{token_id}", headers=csrf(bob)).status_code == 404
+
+
+def test_personal_access_token_pam_user(app, privd):
+    pam = app.test_client()
+    pam_login(pam)
+    assert create_pat(pam, password="wrong").status_code == 400
+    secret = create_pat(pam, password="demo1234").json["secret"]
+    script = app.test_client()
+    assert script.get("/api/users", headers=bearer(secret)).status_code == 200  # admin through sudo
+    # A token never opens the system terminal, even for a PAM user.
+    assert script.post("/api/terminal/ticket", headers=bearer(secret)).status_code == 403
+
+    # The system account is re-checked once per access-token lifetime.
+    with app.app_context():
+        get_db().execute("UPDATE api_tokens SET checked_at = 0")
+        get_db().commit()
+    privd.groups = ["demo", "homeacces-pam"]
+    assert script.get("/api/users", headers=bearer(secret)).status_code == 403  # no longer admin
+    with app.app_context():
+        get_db().execute("UPDATE api_tokens SET checked_at = 0")
+        get_db().commit()
+    privd.account_ok = False
+    assert script.get("/api/items", headers=bearer(secret)).status_code == 401

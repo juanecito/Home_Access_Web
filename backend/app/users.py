@@ -4,7 +4,7 @@ from flask import Blueprint, abort, g, jsonify
 from . import ssh
 from .activity import record
 from .auth import (hash_password, json_body, public_user, require_auth, revoke_all_refresh_tokens,
-                   validate_new_local_username, validate_password)
+                   revoke_api_tokens, validate_new_local_username, validate_password)
 from .db import get_db
 
 bp = Blueprint("users", __name__, url_prefix="/api/users")
@@ -97,6 +97,7 @@ def update_user(user_id):
         db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
         db.commit()
         revoke_all_refresh_tokens(user_id, reason="password set by an admin")
+        revoke_api_tokens(user_id, reason="password set by an admin")
         changed.append("password")
 
     db.commit()
